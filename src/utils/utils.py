@@ -1,0 +1,5 @@
+AUTISM_DATASET_PATH    = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\autism_data\ill"
+PARKINSON_DATASET_PATH = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\parkinson_data"
+CONTROL_DATASET_PATH   = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\autism_data\control"
+REDUCED_DATASET_PATH   = r"/preprocessed_dataset"
+SAVED_MODELS_PATH      = r"/src/classification/best_clf"
