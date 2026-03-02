@@ -3,7 +3,7 @@ import os
 from PIL import Image
 from typing import Tuple
 
-from data_augmentation import AxisHolder
+from classification.data_augmentation import AxisHolder
 from torch.utils.data import random_split, DataLoader
 from classification.clf import MultiCLF, train_multi
 from utils.utils import REDUCED_DATASET_PATH
@@ -19,6 +19,7 @@ def read_dataset(path: str) -> Tuple[np.ndarray, np.ndarray]:
         if   "control"   in file: y.append(0)
         elif "autism"    in file: y.append(1)
         elif "parkinson" in file: y.append(2)
+        else: y.append(3)
 
     return np.array(X), np.array(y)
 
@@ -33,7 +34,7 @@ def main() -> None:
 
     ds = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
 
-    train_ds, val_ds = random_split(ds, [80, 20])
+    train_ds, val_ds = random_split(ds, [0.8, 0.2])
 
     train_transforms = tv.Compose([
         tv.ToTensor(),

@@ -1,7 +1,8 @@
 from pca import read_mri, resize_img
-from utils import PARKINSON_DATASET_PATH, CONTROL_DATASET_PATH, AUTISM_DATASET_PATH, REDUCED_DATASET_PATH
+from utils.utils import *
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 # from mxnet-the-straight-dope
 def unfold(tensor: np.ndarray, mode: int) -> np.ndarray:
@@ -24,13 +25,13 @@ def n_mode_prod(tensor: np.ndarray, matrix: np.ndarray, mode: int) -> np.ndarray
 
     return fold(res, mode, tuple(new_shape))
 
-def mpca(dataset: np.ndarray, iterations: int = 15, ranks: tuple = (128, 128, 1), projection_mode: str = 'depth') -> np.ndarray:
+def mpca(dataset: np.ndarray, iterations: int = 15, ranks: tuple = (128, 128, 1), projection_mode: str = 'sagital') -> np.ndarray:
     """
     This function projects all tensors from dataset from initial shape to ranks shape
     :param dataset: array of tensors shaped 128x128x128
     :param iterations: number of iterations for calculating projection matrices
     :param ranks: output shape
-    :param projection_mode: full or depth mode: full mode uses all three projection matrices, depth uses only one
+    :param projection_mode: full, axial, sagital, frontal modes: full mode uses all three projection matrices, others uses only one
     depth projection matrix
     :return: returns projected dataset
     """
@@ -87,8 +88,12 @@ def mpca(dataset: np.ndarray, iterations: int = 15, ranks: tuple = (128, 128, 1)
     projected_all = []
     for i in range(n):
         proj = dataset[i]
-        if projection_mode == "depth":
+        if projection_mode == "sagital":
             proj = n_mode_prod(proj, Us[2].T, 2)
+        elif projection_mode == "frontal":
+            proj = n_mode_prod(proj, Us[1].T, 1)
+        elif projection_mode == "axial":
+            proj = n_mode_prod(proj, Us[0].T, 0)
         elif projection_mode == "full":
             for m in range(3):
                 proj = n_mode_prod(proj, Us[m].T, m)
@@ -105,25 +110,70 @@ def normalize_image(img):
 
     return img_norm
 
-
 def main() -> None:
     parkinson = read_mri(PARKINSON_DATASET_PATH)
     autism    = read_mri(AUTISM_DATASET_PATH)
     control   = read_mri(CONTROL_DATASET_PATH)
-    dataset   = np.vstack([parkinson, control, autism])
-    dataset = np.array([resize_img(img, (128, 128, 128)) for img in dataset])
+    alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
 
-    dataset = mpca(dataset, 15,(128, 128, 3), 'depth')
+    namings   = ["parkinson", "control", "autism", "alzheimer"]
+    dataset   = [parkinson, control, autism, alzheimer]
 
-    for i, img in enumerate(dataset):
-        img = np.transpose(np.squeeze(img), (0, 1, 2))
+    s = np.array([img.shape for img in dataset])
+
+    temp = []
+    min_s = np.min(s, axis=0)[1:]
+    for data in dataset:
+        for img in data:
+            new_img = resize_img(img, min_s)
+            temp.append(new_img)
+    
+    resized_dataset = np.array(temp)
+
+    w, h = np.min(s, axis=0)[0:2]
+    c = 3
+    plane = "axial"
+    plane2shape = \
+    {
+        "sagital": (w, h, c),
+        "frontal": (w, c, h),
+        "axial"  : (c, w, h)
+    }
+    plane2axis = \
+    {
+        "sagital": (0, 1, 2),
+        "frontal": (0, 2, 1),
+        "axial"  : (1, 2, 0)
+    }
+    axis  = plane2axis[plane]
+    shape = plane2shape[plane]
+    reduced_dataset = mpca(resized_dataset, 15, shape, plane)
+
+    sizes = [np.size(data, axis=0) for data in dataset]
+
+    ranges = []
+
+    l, r = 0, 0
+    for i in range(len(sizes)):
+        r += sizes[i]
+        ranges.append((l, r))
+        l = r
+
+    for i, img in enumerate(reduced_dataset):
+        img = np.squeeze(img)
+        img = np.transpose(img, axis)
         img = normalize_image(img)
-        if i < 30:
-            plt.imsave(REDUCED_DATASET_PATH + f"/sagital/parkinson_{i}.png", img)
-        elif 30 <= i < 70:
-            plt.imsave(REDUCED_DATASET_PATH + f"/sagital/control{i}.png", img)
-        else:
-            plt.imsave(REDUCED_DATASET_PATH + f"/sagital/autism_{i}.png", img)
+        
+        name_ind = 0
+        for j, k in enumerate(ranges):
+            left, right = k
+            if left <= i < right:
+                name_ind = j
+                break
+
+        name = namings[name_ind]
+        pth = os.path.join(REDUCED_DATASET_PATH, plane, f"{name}_{i}.png")
+        plt.imsave(pth, img)
 
 if __name__ == "__main__":
     main()

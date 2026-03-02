@@ -5,7 +5,7 @@ import os
 from skimage.transform import resize
 from sklearn.decomposition import PCA
 
-from utils import PARKINSON_DATASET_PATH, CONTROL_DATASET_PATH, AUTISM_DATASET_PATH
+from utils.utils import PARKINSON_DATASET_PATH, CONTROL_DATASET_PATH, AUTISM_DATASET_PATH
 
 
 def read_mri(filepath: str) -> np.ndarray:

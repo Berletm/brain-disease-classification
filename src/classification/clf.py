@@ -10,9 +10,11 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from utils.utils import SAVED_MODELS_PATH
+from utils.logger import Tee
 
-from dim_reduction.utils import SAVED_MODELS_PATH
-from rl_env import ReinforceEnvironment, train_on_session, generate_session
+from tqdm import tqdm
+import sys
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -160,7 +162,7 @@ def train(n_epoch:    int,
           X_val:      np.ndarray,
           y_val:      np.ndarray,
           batch_size: int,
-          shuffle:    bool) -> [nn.Module, np.ndarray]:
+          shuffle:    bool) -> Tuple[nn.Module, np.ndarray]:
     X_tensor = torch.from_numpy(X).float().to(device)
     X_val_tensor = torch.from_numpy(X_val).float().to(device)
     y_tensor = torch.from_numpy(y).long().to(device)
@@ -231,7 +233,7 @@ def train(n_epoch:    int,
 def train_torch(n_epoch:  int,
                 model:    nn.Module,
                 train_loader: DataLoader,
-                val_loader  : DataLoader) -> [nn.Module, np.ndarray]:
+                val_loader  : DataLoader) -> Tuple[nn.Module, np.ndarray]:
     model = model.to(device)
     optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     criterion = CrossEntropyLoss(label_smoothing=0.1)
@@ -263,7 +265,7 @@ def train_torch(n_epoch:  int,
 def train_multi(n_epoch:  int,
                 model:    nn.Module,
                 train_loader: DataLoader,
-                val_loader  : DataLoader) -> [nn.Module, np.ndarray]:
+                val_loader  : DataLoader) -> Tuple[nn.Module, np.ndarray]:
     model = model.to(device)
     optimizer = AdamW([
         {'params': model.clf_head.parameters(), 'lr': 1e-4},
@@ -278,6 +280,10 @@ def train_multi(n_epoch:  int,
     counter  = 0
     best_metric = 0.0
 
+    log_file = open(r"classification/training.log", "w+")
+
+    sys.stdout = Tee(log_file, sys.stdout)
+
     for epoch in range(n_epoch):
         if counter > patience:
             print(f"Early stopping at epoch: {epoch+1}/{n_epoch} with best val acc: {best_metric}")
@@ -286,7 +292,10 @@ def train_multi(n_epoch:  int,
         train_loss = 0.0
         correct = 0
         total = 0
-        for images, labels in train_loader:
+
+        progress_bar = tqdm(train_loader, desc=f"epoch №{epoch+1}")
+
+        for images, labels in progress_bar:
 
             ax, front, sag = images
             ax = ax.to(device)
@@ -300,20 +309,22 @@ def train_multi(n_epoch:  int,
             train_loss += loss
             correct += (preds == labels).sum().item()
             total += len(labels)
-        train_loss /= total
-        train_acc   = correct / total
+            progress_bar.set_postfix(train_loss=f"{train_loss:.4f}", train_acc=f"{correct/total:.4f}")
+        train_acc  = correct / total
 
         val_loss, val_acc = validate(model, criterion, val_loader)
 
         if val_acc > best_metric:
             counter = 0
             best_metric = val_acc
-            torch.save(model.state_dict(), SAVED_MODELS_PATH+"/multi_clf.pth")
+            torch.save(model.state_dict(), SAVED_MODELS_PATH+"/best_multi.pth")
         else: counter += 1
 
         scheduler.step()
         print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f}")
 
+    log_file.close()
+    sys.stdout = sys.__stdout__
     return model
 
 def train_step(x, y, model: nn.Module, optimizer, criterion: nn.Module) -> Tuple[float, torch.Tensor]:
@@ -347,36 +358,9 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
             correct += (preds == labels).sum().item()
             val_loss += criterion(output, labels).item()
             total += len(labels)
-        val_loss /= total
         val_acc = correct / total
 
     return val_loss, val_acc
-
-def train_rl(n_epoch: int,
-             agent: nn.Module,
-             X_val: np.ndarray,
-             y_val: np.ndarray,
-             env: ReinforceEnvironment) -> [nn.Module, np.ndarray]:
-
-    agent = agent.to(device)
-    rewards_hist = []
-    optimizer = AdamW(agent.parameters(), lr=1e-3, weight_decay=1e-4)
-
-    for epoch in range(n_epoch):
-        rewards = [train_on_session(agent, optimizer, *generate_session(env, agent, 100, epoch), entropy_coef=1e-3) for _ in range(10)]
-
-        rewards_hist.extend(rewards)
-
-        with torch.no_grad():
-            X_tensor = torch.tensor(X_val, dtype=torch.float32).to(device)
-            output = agent(X_tensor).detach().cpu().numpy()
-            y_pred = np.argmax(output, axis=1)
-            acc = accuracy_score(y_val, y_pred)
-
-            print(f"epoch {epoch}/{n_epoch}, acc: {acc:.3f}, mean reward: {np.mean(rewards):.3f}")
-
-    return agent, rewards_hist
-
 
 def cross_validate(model: nn.Module, X: np.ndarray, y: np.ndarray) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
