@@ -1,4 +1,4 @@
-from pca import read_mri, resize_img
+from preprocessing.pca import read_mri, resize_img
 from utils.utils import *
 import numpy as np
 import matplotlib.pyplot as plt
@@ -110,14 +110,15 @@ def normalize_image(img):
 
     return img_norm
 
-def main() -> None:
+def generate_reduced_dataset(plane: str="axial") -> None:
     parkinson = read_mri(PARKINSON_DATASET_PATH)
     autism    = read_mri(AUTISM_DATASET_PATH)
     control   = read_mri(CONTROL_DATASET_PATH)
+    control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
     alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
 
-    namings   = ["parkinson", "control", "autism", "alzheimer"]
-    dataset   = [parkinson, control, autism, alzheimer]
+    namings   = ["parkinson", "control", "control_ixi", "autism", "alzheimer"]
+    dataset   = [parkinson, control, control_ixi, autism, alzheimer]
 
     s = np.array([img.shape for img in dataset])
 
@@ -132,7 +133,6 @@ def main() -> None:
 
     w, h = np.min(s, axis=0)[0:2]
     c = 3
-    plane = "axial"
     plane2shape = \
     {
         "sagital": (w, h, c),
@@ -176,4 +176,4 @@ def main() -> None:
         plt.imsave(pth, img)
 
 if __name__ == "__main__":
-    main()
+    generate_reduced_dataset()

@@ -49,6 +49,8 @@ class AxisHolder(Holder):
 
         self.images: list[Axis] = []
 
+        self.counts = [self.labels.count(i) for i in range(4)]
+
         for img in os.listdir(self.dir + "/axial"):
             ax_dir = os.path.join(self.dir + "/axial", img)
             front_dir = os.path.join(self.dir + "/frontal", img)

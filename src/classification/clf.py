@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, List
 
 import torchvision.models as models
 import numpy as np
@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score, precision_score
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from utils.utils import SAVED_MODELS_PATH
@@ -168,8 +168,7 @@ class MultiCLF(nn.Module):
         self.model_front.fc = nn.Identity()
         self.model_sag.fc = nn.Identity()
 
-        self.attention = Attention(features_dim, hidden_dim, num_classes)
-        # self.cross_attention = CrossAttention(features_dim, 4)
+        self.cross_attention = CrossAttention(features_dim, 4)
 
         self.clf_head = nn.Sequential(
             nn.Linear(features_dim, hidden_dim),
@@ -187,15 +186,9 @@ class MultiCLF(nn.Module):
         front_logits = self.model_front(front)
         sag_logits   = self.model_sag(sag)
 
-        logits = torch.cat([ax_logits, front_logits, sag_logits], dim=1)
+        logits = torch.cat([ax_logits, front_logits, sag_logits], dim=0)
 
-        weights = self.attention(logits)
-
-        fused_logits = (
-            weights[:, 0].unsqueeze(1) * ax_logits +
-            weights[:, 1].unsqueeze(1) * front_logits +
-            weights[:, 2].unsqueeze(1) * sag_logits
-        )
+        fused_logits = self.cross_attention(ax_logits, logits)
 
         return self.clf_head(fused_logits)
 
@@ -325,21 +318,25 @@ def train_torch(n_epoch:  int,
 def train_multi(n_epoch:  int,
                 model:    nn.Module,
                 train_loader: DataLoader,
-                val_loader  : DataLoader) -> Tuple[nn.Module, np.ndarray]:
+                val_loader  : DataLoader,
+                weights:List|np.ndarray=[1.0, 1.0, 1.0, 1.0]) -> Tuple[nn.Module, np.ndarray]:
     model = model.to(device)
     optimizer = AdamW([
-        {'params': model.clf_head.parameters(), 'lr': 1e-4},
+        {'params': model.clf_head.parameters(), 'lr': 1e-3},
         {'params': [p for p in model.model_ax.parameters() if p.requires_grad], 'lr': 1e-6},
         {'params': [p for p in model.model_sag.parameters() if p.requires_grad], 'lr': 1e-6},
         {'params': [p for p in model.model_front.parameters() if p.requires_grad], 'lr': 1e-6},
     ], weight_decay=1e-3)
-    criterion = CrossEntropyLoss(label_smoothing=0.1)
+    weights = torch.Tensor(weights, device)
+    criterion = CrossEntropyLoss(label_smoothing=0.1, weight=weights)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, eta_min=1e-6)
+    scheduler2 = ReduceLROnPlateau(optimizer, patience=10, min_lr=1e-7)
 
-    patience = 30
+    patience = 20
     counter  = 0
     best_loss = float("inf")
     best_acc = 0.0
+    best_metric = 0.0
 
     log_file = open(r"classification/training.log", "w+")
 
@@ -375,19 +372,23 @@ def train_multi(n_epoch:  int,
         train_acc  = correct / total
         train_loss /= total
 
-        val_loss, val_acc, _ = validate(model, criterion, val_loader)
+        val_loss, metrics, cm = validate(model, criterion, val_loader)
 
-        if val_loss < best_loss:
+        val_acc, f1, recall, precision = metrics
+
+        if f1 > best_metric:
             counter = 0
             best_loss = val_loss
             best_acc  = val_acc
+            best_metric = f1
             torch.save(model.state_dict(), SAVED_MODELS_PATH+"/best_multi.pth")
         else: counter += 1
 
 
         scheduler.step()
+        scheduler2.step(f1)
         print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f}")
-
+        print(f"f1 weighted: {f1:.4f} | recall: {recall:.4f} | precision: {precision:.4f}")
     log_file.close()
     sys.stdout = sys.__stdout__
     return model
@@ -432,7 +433,12 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
         val_acc = correct / total
         val_loss /= total
 
-    return val_loss, val_acc, confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average="weighted")
+    recall = recall_score(y_true, y_pred, average="weighted")
+    precision = precision_score(y_true, y_pred, average="weighted", zero_division=0)
+
+    return val_loss, (val_acc, f1, recall, precision), cm
 
 def cross_validate(model: nn.Module, X: np.ndarray, y: np.ndarray) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
