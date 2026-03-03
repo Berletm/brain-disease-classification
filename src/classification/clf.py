@@ -94,8 +94,63 @@ class ConvCLF(nn.Module):
 
         return torch.argmax(output, dim=1).cpu().numpy()
 
+class Attention(nn.Module):
+    def __init__(self, feature_dim:int=512, hidden_dim:int=256, num_classes:int=4):
+        super().__init__()
+        self.attn_pool = nn.Sequential(
+            nn.Linear(feature_dim * 3, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 3),
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, features) -> torch.Tensor:
+        weights = self.attn_pool(features)
+
+        return weights
+
+class CrossAttention(nn.Module):
+    def __init__(self, feature_dim:int=512, heads_num:int=4):
+        super().__init__()
+
+        self.feature_dim = feature_dim
+        self.heads_num = heads_num
+        self.head_dim  = feature_dim // self.heads_num
+        self.planes    = 3
+
+        self.q_proj = nn.Linear(feature_dim, feature_dim)
+        self.k_proj = nn.Linear(feature_dim, feature_dim)
+        self.v_proj = nn.Linear(feature_dim, feature_dim)
+
+        self.out_proj = nn.Linear(feature_dim, feature_dim)
+
+        self.softmax = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, q_features: torch.Tensor, kv_features: torch.Tensor) -> torch.Tensor:
+        batch_size = q_features.size(0)
+
+        Q = self.q_proj(q_features)  # (512 x 512) * (512 x 1) = (512 x 1)
+        Q = Q.view(batch_size, self.heads_num, self.head_dim) # (4 x 128) ~ 4 vec 128 x 1
+        
+        K = self.k_proj(kv_features) # (512 x 512) * (512 x 3) = (512 x 3)
+        K = K.view(batch_size, self.planes, self.heads_num, self.head_dim) # 3 x 4 x 128 = 3 x (4 x 128) ~ 3 mat 4 vecs 128 x 1
+        
+        V = self.v_proj(kv_features) # (512 x 512) * (512 x 3) = (512 x 3)
+        V = V.view(batch_size, self.planes, self.heads_num, self.head_dim) # 3 x 4 x 128 = 3 x (4 x 128) ~ 3 mat 4 vecs 128 x 1
+
+        attn_scores = torch.einsum('bhd,bkhd->bhk', Q, K) # (4 x 3) ~ 4 vecs w scalars for planes
+        attn_scores = attn_scores / (Q.shape[-1] ** 0.5)  # normalization from "Attetion is all you need"
+        attn_probs = self.softmax(attn_scores)
+        attn_probs = self.dropout(attn_probs)
+
+        out = torch.einsum('bhk,bkhd->bhd', attn_probs, V) # (3 x (4 x 128)) * (3 x 4) = 4 x 128 ~ 4 vec 128 x 1
+        out = out.reshape(batch_size, -1) # flatten
+        
+        return self.out_proj(out) + q_features
+
 class MultiCLF(nn.Module):
-    def __init__(self):
+    def __init__(self, hidden_dim:int=256, num_classes:int=4):
         super().__init__()
 
         self.model_ax = models.resnet18(weights="DEFAULT")
@@ -107,23 +162,20 @@ class MultiCLF(nn.Module):
                 if 'layer4' not in name and 'fc' not in name:
                     param.requires_grad = False
 
-        head_in = self.model_ax.fc.in_features
+        features_dim = self.model_ax.fc.in_features
 
         self.model_ax.fc = nn.Identity()
         self.model_front.fc = nn.Identity()
         self.model_sag.fc = nn.Identity()
 
+        self.attention = Attention(features_dim, hidden_dim, num_classes)
+        # self.cross_attention = CrossAttention(features_dim, 4)
+
         self.clf_head = nn.Sequential(
-            nn.BatchNorm1d(head_in * 3),
-            nn.Dropout(0.55),
-            nn.Linear(head_in * 3, 256),
-            nn.ReLU(),
-            nn.BatchNorm1d(256),
-            nn.Dropout(0.4),
-            nn.Linear(256, 64),
+            nn.Linear(features_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(64, 4)
+            nn.Linear(hidden_dim, num_classes)
         )
 
         self.softmax = nn.Softmax()
@@ -137,7 +189,15 @@ class MultiCLF(nn.Module):
 
         logits = torch.cat([ax_logits, front_logits, sag_logits], dim=1)
 
-        return self.clf_head(logits)
+        weights = self.attention(logits)
+
+        fused_logits = (
+            weights[:, 0].unsqueeze(1) * ax_logits +
+            weights[:, 1].unsqueeze(1) * front_logits +
+            weights[:, 2].unsqueeze(1) * sag_logits
+        )
+
+        return self.clf_head(fused_logits)
 
     def predict(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> np.ndarray:
         ax, front, sag = x
@@ -287,7 +347,7 @@ def train_multi(n_epoch:  int,
 
     for epoch in range(n_epoch):
         if counter > patience:
-            print(f"Early stopping at epoch: {epoch+1}/{n_epoch} with best val acc: {best_acc} and best val loss: {best_loss}")
+            print(f"Early stopping at epoch: {epoch+1}/{n_epoch} with best val acc: {best_acc:.4f} and best val loss: {best_loss:4f}")
             break
         model.train()
         train_loss = 0.0
@@ -315,7 +375,7 @@ def train_multi(n_epoch:  int,
         train_acc  = correct / total
         train_loss /= total
 
-        val_loss, val_acc = validate(model, criterion, val_loader)
+        val_loss, val_acc, _ = validate(model, criterion, val_loader)
 
         if val_loss < best_loss:
             counter = 0
@@ -349,6 +409,8 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
     val_loss = 0.0
     correct = 0
     total = 0
+    y_pred = []
+    y_true = []
     with torch.no_grad():
         for images, labels in val_loader:
             ax, front, sag = images
@@ -360,6 +422,8 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
 
             output = model(images)
             preds = torch.argmax(output, dim=1)
+            y_pred.extend(preds.cpu().numpy().tolist())
+            y_true.extend(labels.cpu().numpy().tolist())
             batch_size = labels.size(0)
 
             correct += (preds == labels).sum().item()
@@ -368,7 +432,7 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
         val_acc = correct / total
         val_loss /= total
 
-    return val_loss, val_acc
+    return val_loss, val_acc, confusion_matrix(y_true, y_pred)
 
 def cross_validate(model: nn.Module, X: np.ndarray, y: np.ndarray) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
