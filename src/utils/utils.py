@@ -4,4 +4,4 @@ CONTROL_DATASET_PATH   = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\autism_
 ALZHEIMER_ZIP_PATH     = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\alzheimer"
 ALZHEIMER_DATASET_PATH = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\alzheimer_data"
 REDUCED_DATASET_PATH   = r"Z:\code\brain-disease-classification\preprocessed_dataset"
-SAVED_MODELS_PATH      = r"Z:\PycharmProjects\mri_new\classification\best_clf"
+SAVED_MODELS_PATH      = r"Z:\code\brain-disease-classification\src\classification\saved_models"

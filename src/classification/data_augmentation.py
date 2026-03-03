@@ -27,6 +27,7 @@ class Holder(Dataset):
             if "control"     in img: self.labels.append(0)
             elif "parkinson" in img: self.labels.append(1)
             elif "autism"    in img: self.labels.append(2)
+            else: self.labels.append(3)
 
     def __len__(self) -> int:
         return len(self.images)
@@ -58,6 +59,7 @@ class AxisHolder(Holder):
             if "control"     in img: self.labels.append(0)
             elif "parkinson" in img: self.labels.append(1)
             elif "autism"    in img: self.labels.append(2)
+            else: self.labels.append(3)
 
     def __len__(self) -> int:
         return len(self.images)

@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from utils.utils import SAVED_MODELS_PATH
@@ -114,16 +114,16 @@ class MultiCLF(nn.Module):
         self.model_sag.fc = nn.Identity()
 
         self.clf_head = nn.Sequential(
-            nn.BatchNorm1d(head_in),
+            nn.BatchNorm1d(head_in * 3),
             nn.Dropout(0.55),
-            nn.Linear(head_in, 256),
+            nn.Linear(head_in * 3, 256),
             nn.ReLU(),
             nn.BatchNorm1d(256),
             nn.Dropout(0.4),
             nn.Linear(256, 64),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(64, 3)
+            nn.Linear(64, 4)
         )
 
         self.softmax = nn.Softmax()
@@ -135,7 +135,7 @@ class MultiCLF(nn.Module):
         front_logits = self.model_front(front)
         sag_logits   = self.model_sag(sag)
 
-        logits = (ax_logits + front_logits + sag_logits) / 3
+        logits = torch.cat([ax_logits, front_logits, sag_logits], dim=1)
 
         return self.clf_head(logits)
 
@@ -146,7 +146,7 @@ class MultiCLF(nn.Module):
         front_logits = self.model_front(front)
         sag_logits = self.model_sag(sag)
 
-        logits = (ax_logits + front_logits + sag_logits) / 3
+        logits = torch.cat([ax_logits, front_logits, sag_logits], dim=1)
 
         logits = self.clf_head(logits)
 
@@ -276,9 +276,10 @@ def train_multi(n_epoch:  int,
     criterion = CrossEntropyLoss(label_smoothing=0.1)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, eta_min=1e-6)
 
-    patience = 20
+    patience = 30
     counter  = 0
-    best_metric = 0.0
+    best_loss = float("inf")
+    best_acc = 0.0
 
     log_file = open(r"classification/training.log", "w+")
 
@@ -286,7 +287,7 @@ def train_multi(n_epoch:  int,
 
     for epoch in range(n_epoch):
         if counter > patience:
-            print(f"Early stopping at epoch: {epoch+1}/{n_epoch} with best val acc: {best_metric}")
+            print(f"Early stopping at epoch: {epoch+1}/{n_epoch} with best val acc: {best_acc} and best val loss: {best_loss}")
             break
         model.train()
         train_loss = 0.0
@@ -305,20 +306,24 @@ def train_multi(n_epoch:  int,
             labels = labels.to(device)
 
             loss, preds = train_step(images, labels, model, optimizer, criterion)
+            batch_size = labels.size(0)
 
-            train_loss += loss
+            train_loss += loss * batch_size
             correct += (preds == labels).sum().item()
-            total += len(labels)
-            progress_bar.set_postfix(train_loss=f"{train_loss:.4f}", train_acc=f"{correct/total:.4f}")
+            total += batch_size
+            progress_bar.set_postfix(train_loss=f"{train_loss/total:.4f}", train_acc=f"{correct/total:.4f}")
         train_acc  = correct / total
+        train_loss /= total
 
         val_loss, val_acc = validate(model, criterion, val_loader)
 
-        if val_acc > best_metric:
+        if val_loss < best_loss:
             counter = 0
-            best_metric = val_acc
+            best_loss = val_loss
+            best_acc  = val_acc
             torch.save(model.state_dict(), SAVED_MODELS_PATH+"/best_multi.pth")
         else: counter += 1
+
 
         scheduler.step()
         print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f}")
@@ -355,10 +360,13 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
 
             output = model(images)
             preds = torch.argmax(output, dim=1)
+            batch_size = labels.size(0)
+
             correct += (preds == labels).sum().item()
-            val_loss += criterion(output, labels).item()
-            total += len(labels)
+            val_loss += criterion(output, labels).item() * batch_size
+            total += batch_size
         val_acc = correct / total
+        val_loss /= total
 
     return val_loss, val_acc
 

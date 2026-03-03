@@ -6,8 +6,9 @@ from typing import Tuple
 from classification.data_augmentation import AxisHolder
 from torch.utils.data import random_split, DataLoader
 from classification.clf import MultiCLF, train_multi
-from utils.utils import REDUCED_DATASET_PATH
+from utils.utils import REDUCED_DATASET_PATH, SAVED_MODELS_PATH
 import torchvision.transforms as tv
+import torch
 
 def read_dataset(path: str) -> Tuple[np.ndarray, np.ndarray]:
     X = []
@@ -51,13 +52,15 @@ def main() -> None:
 
     train_ds.x_transforms = train_transforms
 
-    train_loader = DataLoader(train_ds, batch_size=20, shuffle=True, num_workers=4, pin_memory=True)
-    test_loader  = DataLoader(val_ds,  batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=2, pin_memory=True)
+    test_loader  = DataLoader(val_ds,  batch_size=1, shuffle=True, num_workers=2, pin_memory=True)
 
     model = MultiCLF()
 
-    model = train_multi(n_epoch=100, model=model, train_loader=train_loader, val_loader=test_loader)
-
+    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader)
+    
+    pth = os.path.join(SAVED_MODELS_PATH, "multi.pth")
+    torch.save(model, pth)
 
 
 if __name__ == "__main__":
