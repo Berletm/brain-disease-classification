@@ -3,16 +3,16 @@ import os
 from PIL import Image
 from typing import Tuple
 
-from classification.data_augmentation import AxisHolder
+from data_augmentation import AxisHolder
 from torch.utils.data import random_split, DataLoader
-from classification.clf import MultiCLF, train_multi, validate
-from utils.utils import REDUCED_DATASET_PATH, SAVED_MODELS_PATH
+from clf import MultiCLF, train_multi, validate
+from utils import REDUCED_DATASET_PATH, SAVED_MODELS_PATH
 import torchvision.transforms as tv
 import torchvision.transforms.v2 as tv2
 import torch
 torch.manual_seed(0)
 
-from preprocessing.mpca import generate_reduced_dataset
+from mpca import generate_reduced_dataset
 
 def main() -> None:
     x_base_transforms = tv.Compose(
@@ -24,8 +24,6 @@ def main() -> None:
     ])
 
     ds = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
-
-    weights = 1 / np.array(ds.counts)
 
     train_ds, val_ds = random_split(ds, [0.8, 0.2])
 
@@ -69,28 +67,17 @@ def main() -> None:
 
     train_ds.x_transforms = train_transforms
 
-    train_loader = DataLoader(train_ds, batch_size=20, shuffle=True, num_workers=2, pin_memory=True)
     test_loader  = DataLoader(val_ds,  batch_size=1, shuffle=True, num_workers=2, pin_memory=True)
 
-    model = MultiCLF()
-
-    model = torch.load(SAVED_MODELS_PATH + "/v4/multi.pth", "cuda", weights_only=False)
-    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights)
-    
-    pth = os.path.join(SAVED_MODELS_PATH, "multi.pth")
-    torch.save(model, pth)
+    model = torch.load(SAVED_MODELS_PATH + "/multi.pth", "cuda", weights_only=False)
 
     criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
     loss, metrics, conf = validate(model, criterion, test_loader)
     
     acc, f1, recall, precision = metrics
-
+    print(f1, recall, precision)
     print(f"loss: {loss:.4f} | acc: {acc:.4f}")
     print(f"confusion mat: {conf}")
 
 if __name__ == "__main__":
-    # for plane in ["axial", "sagital", "frontal"]:
-    #     print(plane)
-    #     generate_reduced_dataset(plane)
-    #     print("\n\n")
     main()
