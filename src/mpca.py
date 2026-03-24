@@ -112,14 +112,15 @@ def normalize_image(img):
 
 def generate_reduced_dataset(plane: str="axial") -> None:
     parkinson = read_mri(PARKINSON_DATASET_PATH)
-    autism    = read_mri(AUTISM_DATASET_PATH)
+    # autism    = read_mri(AUTISM_DATASET_PATH)
     control   = read_mri(CONTROL_DATASET_PATH)
     control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
     alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
     adhd      = read_mri(ADHD_DATASET_PATH)
+    control_adhd = read_mri(CONTROL_ADHD_DATASET_PATH)
 
-    namings   = ["parkinson", "control", "control_ixi", "autism", "alzheimer", "adhd"]
-    dataset   = [parkinson, control, control_ixi, autism, alzheimer, adhd]
+    namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "control_adhd"]
+    dataset   = [parkinson, control, control_ixi, alzheimer, adhd, control_adhd]
 
     s = np.array([img.shape for img in dataset])
 

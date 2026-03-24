@@ -5,7 +5,7 @@ from typing import Tuple
 
 from data_augmentation import AxisHolder
 from torch.utils.data import random_split, DataLoader
-from clf import MultiCLF, train_multi, validate
+from clf import MultiCLF, train_multi, validate, CrossAttention
 from utils import REDUCED_DATASET_PATH, SAVED_MODELS_PATH
 import torchvision.transforms as tv
 import torchvision.transforms.v2 as tv2
@@ -24,6 +24,7 @@ def main() -> None:
     ])
 
     ds = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
+    weights = 1 / np.array(ds.counts)
 
     train_ds, val_ds = random_split(ds, [0.8, 0.2])
 
@@ -69,9 +70,10 @@ def main() -> None:
 
     test_loader  = DataLoader(val_ds,  batch_size=1, shuffle=True, num_workers=2, pin_memory=True)
 
-    model = torch.load(SAVED_MODELS_PATH + "/multi.pth", "cuda", weights_only=False)
+    model: MultiCLF = torch.load(SAVED_MODELS_PATH + "/bestofthebest.pth", "cuda", weights_only=False)
 
-    criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
+    weights = torch.tensor(weights, dtype=torch.float32, device="cuda")
+    criterion = torch.nn.CrossEntropyLoss(weight=weights)
     loss, metrics, conf = validate(model, criterion, test_loader)
     
     acc, f1, recall, precision = metrics

@@ -364,10 +364,10 @@ def train_multi(n_epoch:  int,
     ], weight_decay=1e-4)
     weights = torch.tensor(weights, dtype=torch.float32, device=device)
     criterion = CrossEntropyLoss(weight=weights)
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, eta_min=1e-6)
+    # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, eta_min=1e-6)
     scheduler2 = ReduceLROnPlateau(optimizer, patience=10, min_lr=1e-6)
 
-    patience = 20
+    patience = 10
     counter  = 0
     best_loss = float("inf")
     best_acc = 0.0
@@ -421,7 +421,7 @@ def train_multi(n_epoch:  int,
         else: counter += 1
 
 
-        scheduler.step()
+        # scheduler.step()
         scheduler2.step(f1)
         print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f} | f1 weighted: {f1:.4f} | recall: {recall:.4f} | precision: {precision:.4f}")
     log_file.close()
@@ -480,7 +480,8 @@ def cross_validate(model: nn.Module, X: np.ndarray, y: np.ndarray) -> dict:
 
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
-    results = {
+    results = \
+    {
         'fold_accuracies': [],
         'fold_models': [],
         'fold_histories': [],
@@ -534,6 +535,7 @@ def objective(trial: optuna.Trial) -> float:
 
     weights = 1 / np.array(ds.counts)
 
+    
     train_ds, val_ds = random_split(ds, [0.8, 0.2])
 
     train_transforms = tv.Compose([
@@ -576,14 +578,17 @@ def objective(trial: optuna.Trial) -> float:
 
     train_ds.x_transforms = train_transforms
 
-    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=2, pin_memory=True)
-    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=2, pin_memory=True)
+    g = torch.Generator()
+    g.manual_seed(0)
+
+    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=2, pin_memory=True, generator=g)
+    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=2, pin_memory=True, generator=g)
 
     model = MultiCLF(base_model=base_model, hidden_dim=hidden_dim, num_classes=5, attention_heads=attention_heads)
 
     model = train_multi(n_epoch=200, model=model, lr=lr, train_loader=train_loader, val_loader=test_loader, weights=weights)
 
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.CrossEntropyLoss(weight=weights)
     loss, metrics, conf = validate(model, criterion, test_loader)
     
     acc, f1, recall, precision = metrics
@@ -653,12 +658,15 @@ def main() -> None:
 
     train_ds.x_transforms = train_transforms
 
-    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=2, pin_memory=True)
-    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=2, pin_memory=True)
+    g = torch.Generator()
+    g.manual_seed(0)
+    
+    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
 
-    model = MultiCLF(base_model="", num_classes=5, hidden_dim=256, attention_heads=8)
+    model = MultiCLF(base_model="resnet34", num_classes=4, hidden_dim=128, attention_heads=8)
 
-    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.004787844336994075)
+    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.008119797441112507)
 
     pth = os.path.join(SAVED_MODELS_PATH, "bestofthebest.pth")
     torch.save(model, pth)

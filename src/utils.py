@@ -3,6 +3,7 @@ PARKINSON_DATASET_PATH = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\parkins
 CONTROL_DATASET_PATH   = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\autism_data\control"
 CONTROL_IXI_DATASET_PATH = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\control_ixi_data"
 ADHD_DATASET_PATH      = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\adhd_data"
+CONTROL_ADHD_DATASET_PATH = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\control_adhd_data"
 ALZHEIMER_ZIP_PATH     = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\alzheimer"
 ALZHEIMER_DATASET_PATH = r"Z:\PycharmProjects\4sem\AI\MRI\preroc_dataset\alzheimer_data"
 REDUCED_DATASET_PATH   = r"Z:\code\brain-disease-classification\preprocessed_dataset"
