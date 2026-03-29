@@ -1,4 +1,4 @@
-from typing import Tuple, List
+from typing import Tuple, List, Callable
 
 from utils import REDUCED_DATASET_PATH, SAVED_MODELS_PATH
 from data_augmentation import AxisHolder
@@ -12,13 +12,12 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score, precision_score
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Subset
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from utils import SAVED_MODELS_PATH
 from logger import Tee
 import optuna
-
-import pandas as pd
+import gc
 
 optuna.logging.set_verbosity(optuna.logging.INFO)
 
@@ -187,10 +186,29 @@ class MultiCLF(nn.Module):
             self.model_ax.fc = nn.Identity()
             self.model_front.fc = nn.Identity()
             self.model_sag.fc = nn.Identity()
-        else:
-            self.model_ax = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
-            self.model_front = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
-            self.model_sag = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
+
+            for model in [self.model_ax, self.model_sag, self.model_front]:
+                for name, param in model.named_parameters():
+                    if name not in ["layer4", "fc"]:
+                        param.requires_grad = False
+
+        elif "convnext" in base_model:
+            if base_model == "convnext_small":
+                self.model_ax = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
+                self.model_front = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
+                self.model_sag = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
+            elif base_model == "convnext_tiny":
+                self.model_ax = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.DEFAULT)
+                self.model_front = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.DEFAULT)
+                self.model_sag = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.DEFAULT)
+            elif base_model == "convnext_base":
+                self.model_ax = models.convnext_base(weights=models.ConvNeXt_Base_Weights.DEFAULT)
+                self.model_front = models.convnext_base(weights=models.ConvNeXt_Base_Weights.DEFAULT)
+                self.model_sag = models.convnext_base(weights=models.ConvNeXt_Base_Weights.DEFAULT)
+            else:
+                self.model_ax = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
+                self.model_front = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
+                self.model_sag = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
 
             features_dim = self.model_ax.classifier[2].in_features 
 
@@ -198,9 +216,12 @@ class MultiCLF(nn.Module):
             self.model_front.classifier[2] = nn.Identity()
             self.model_sag.classifier[2] = nn.Identity()
 
-        for model in [self.model_ax, self.model_sag, self.model_front]:
-            for param in model.parameters():
-                param.requires_grad = False
+            for model in [self.model_ax, self.model_sag, self.model_front]:
+                for param in model.parameters():
+                    param.requires_grad = False
+
+                for param in model.features[-1].parameters():
+                    param.requires_grad = True
 
         self.cross_attention = CrossAttention(features_dim, attention_heads)
 
@@ -362,18 +383,30 @@ def train_multi(n_epoch:  int,
         {'params': [p for p in model.model_sag.parameters() if p.requires_grad], 'lr': 1e-6},
         {'params': [p for p in model.model_front.parameters() if p.requires_grad], 'lr': 1e-6},
     ], weight_decay=1e-4)
+    patience = 5
     weights = torch.tensor(weights, dtype=torch.float32, device=device)
     criterion = CrossEntropyLoss(weight=weights)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, eta_min=1e-6)
-    scheduler2 = ReduceLROnPlateau(optimizer, patience=10, min_lr=1e-6)
+    scheduler2 = ReduceLROnPlateau(optimizer, patience=patience, min_lr=1e-6, factor=0.5)
 
-    patience = 10
     counter  = 0
     best_loss = float("inf")
     best_acc = 0.0
     best_metric = 0.0
 
-    log_file = open(r"models/training.log", "w+")
+    log_counter = 1
+    f_name = f"models/z{log_counter}"
+    if not os.path.exists(f_name):
+        os.mkdir(f_name)
+        log_file = open(os.path.join(f_name, "training.log"), "w+")
+    else:
+        while True:
+            f_name = f"models/z{log_counter}"
+            if not os.path.exists(f_name):
+                os.mkdir(f"models/z{log_counter}")
+                log_file = open(os.path.join(f_name, "training.log"), "w+")
+                break
+            else: log_counter += 1; continue
 
     sys.stdout = Tee(log_file, sys.stdout)
 
@@ -417,15 +450,14 @@ def train_multi(n_epoch:  int,
             best_acc  = val_acc
             best_metric = f1
             if save:
-                torch.save(model, SAVED_MODELS_PATH+"/best_multi.pth")
+                torch.save(model, os.path.join(SAVED_MODELS_PATH, f"z{log_counter}", "best_multi.pth"))
         else: counter += 1
 
-
-        # scheduler.step()
         scheduler2.step(f1)
         print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f} | f1 weighted: {f1:.4f} | recall: {recall:.4f} | precision: {precision:.4f}")
     log_file.close()
     sys.stdout = sys.__stdout__
+    torch.save(model, os.path.join(SAVED_MODELS_PATH, f"z{log_counter}", f"multi.pth"))
     return model
 
 def train_step(x, y, model: nn.Module, optimizer, criterion: nn.Module) -> Tuple[float, torch.Tensor]:
@@ -475,50 +507,81 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
 
     return val_loss, (val_acc, f1, recall, precision), cm
 
-def cross_validate(model: nn.Module, X: np.ndarray, y: np.ndarray) -> dict:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def cross_validate_pytorch(
+    dataset: AxisHolder, 
+    model_class: Callable,
+    model_params: dict,
+    train_func: Callable, 
+    n_splits: int = 5,
+    batch_size: int = 16,
+):
+    labels = np.array(dataset.labels)
+    indices = np.arange(len(dataset))
 
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
     results = \
     {
+        'fold_f1': [],
+        'fold_recall': [], 
+        'fold_precision': [],
         'fold_accuracies': [],
         'fold_models': [],
-        'fold_histories': [],
         'all_predictions': [],
         'all_true_labels': []
     }
 
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y)):
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
+    for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels)):
+        print(f"Fold {fold + 1}/{n_splits}")
 
-        model, acc_hist = train(100, model, X_train, y_train, X_val, y_val, batch_size=50, shuffle=True)
+        train_subset = Subset(dataset, train_idx)
+        val_subset = Subset(dataset, val_idx)
 
-        X_val_tensor = torch.from_numpy(X_val).float().to(device)
-        y_val_tensor = torch.from_numpy(y_val).long().to(device)
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
+
+        model = model_class(**model_params).to(device) 
+
+        model = train_func(n_epoch=50, model=model, train_loader=train_loader, val_loader=val_loader, lr=0.007133483490519629)
 
         model.eval()
+        val_preds = []
+        val_true = []
+
         with torch.no_grad():
-            val_output = model(X_val_tensor)
-            val_preds = torch.argmax(val_output, dim=1)
-            val_acc   = (y_val_tensor == val_preds).float().mean().item()
+            for inputs, targets in val_loader:
+                inputs = tuple(t.to(device) for t in inputs) 
+                targets = targets.to(device)
 
+                outputs = model(inputs)
+                predictions = torch.argmax(outputs, dim=1)
+
+                val_preds.extend(predictions.cpu().numpy())
+                val_true.extend(targets.cpu().numpy())
+
+        val_preds = np.array(val_preds)
+        val_true = np.array(val_true)
+
+        val_acc = (val_preds == val_true).mean()
+        f1 = f1_score(val_true, val_preds, average="weighted")
+        recall = recall_score(val_true, val_preds, average="weighted")
+        precision = precision_score(val_true, val_preds, average="weighted", zero_division=0)
+
+        results['fold_f1'].append(f1)
+        results['fold_recall'].append(recall)
+        results['fold_precision'].append(precision)
         results['fold_accuracies'].append(val_acc)
-        results['fold_models'].append(model)
-        results['fold_histories'].append(acc_hist)
-        results['all_predictions'].extend(val_preds.cpu().numpy())
-        results['all_true_labels'].extend(y_val)
+        results['all_predictions'].extend(val_preds)
+        results['all_true_labels'].extend(val_true)
 
-    results['mean_accuracy'] = np.mean(results['fold_accuracies'])
-    results['std_accuracy'] = np.std(results['fold_accuracies'])
-    overall_acc = accuracy_score(results['all_true_labels'], results['all_predictions'])
-    results['overall_accuracy'] = overall_acc
+        del model, train_loader, val_loader, train_subset, val_subset
+        torch.cuda.empty_cache()
+        gc.collect()
 
     return results
 
 def objective(trial: optuna.Trial) -> float:
-    base_model = trial.suggest_categorical(name="base_model", choices=["resnet18", "resnet34", "resnet50", ""])
+    base_model = trial.suggest_categorical(name="base_model", choices=["resnet18", "resnet34", "resnet50", "convnext_tiny", "convnext_small", "convnext_base"])
     hidden_dim = trial.suggest_categorical(name="hidden_dim", choices=[64, 128, 256, 512, 1024])
     attention_heads = trial.suggest_categorical(name="heads", choices=[2, 4, 8, 16])
     lr = trial.suggest_float("learning_rate", low=1e-5, high=1e-2)
@@ -535,7 +598,6 @@ def objective(trial: optuna.Trial) -> float:
 
     weights = 1 / np.array(ds.counts)
 
-    
     train_ds, val_ds = random_split(ds, [0.8, 0.2])
 
     train_transforms = tv.Compose([
@@ -581,13 +643,14 @@ def objective(trial: optuna.Trial) -> float:
     g = torch.Generator()
     g.manual_seed(0)
 
-    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=2, pin_memory=True, generator=g)
-    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=2, pin_memory=True, generator=g)
+    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
 
-    model = MultiCLF(base_model=base_model, hidden_dim=hidden_dim, num_classes=5, attention_heads=attention_heads)
+    model = MultiCLF(base_model=base_model, hidden_dim=hidden_dim, num_classes=4, attention_heads=attention_heads)
 
-    model = train_multi(n_epoch=200, model=model, lr=lr, train_loader=train_loader, val_loader=test_loader, weights=weights)
+    model = train_multi(n_epoch=75, model=model, lr=lr, train_loader=train_loader, val_loader=test_loader, weights=weights)
 
+    weights = torch.tensor(weights, dtype=torch.float32, device=device)
     criterion = torch.nn.CrossEntropyLoss(weight=weights)
     loss, metrics, conf = validate(model, criterion, test_loader)
     
@@ -664,18 +727,25 @@ def main() -> None:
     train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=1, pin_memory=True, generator=g)
     test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
 
-    model = MultiCLF(base_model="resnet34", num_classes=4, hidden_dim=128, attention_heads=8)
+    model = MultiCLF(base_model="convnext_base", num_classes=4, hidden_dim=64, attention_heads=16)
 
-    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.008119797441112507)
+    model_params = {"base_model": "convnext_base", "num_classes": 4, "hidden_dim": 64, "attention_heads": 16}
 
-    pth = os.path.join(SAVED_MODELS_PATH, "bestofthebest.pth")
-    torch.save(model, pth)
+    result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
+
+    with open("models/result.txt", "w+") as file:
+        file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
+        file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
+        file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
+        file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
+
+    # model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
 
     # study = optuna.create_study(direction='maximize')
-    # study.optimize(objective, n_trials=100) 
+    # study.optimize(objective, n_trials=100, timeout=4800)
 
     # df = study.trials_dataframe()
-    # df.to_csv("optuna_results.csv", index=False)
+    # df.to_csv("optuna_results2.csv", index=False)
 
     # print(f"Best F1: {study.best_value}")
     # print(f"Best params: {study.best_params}")

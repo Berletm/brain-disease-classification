@@ -3,6 +3,7 @@ from utils import *
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from typing import Dict
 
 # from mxnet-the-straight-dope
 def unfold(tensor: np.ndarray, mode: int) -> np.ndarray:
@@ -110,17 +111,9 @@ def normalize_image(img):
 
     return img_norm
 
-def generate_reduced_dataset(plane: str="axial") -> None:
-    parkinson = read_mri(PARKINSON_DATASET_PATH)
-    # autism    = read_mri(AUTISM_DATASET_PATH)
-    control   = read_mri(CONTROL_DATASET_PATH)
-    control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
-    alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
-    adhd      = read_mri(ADHD_DATASET_PATH)
-    control_adhd = read_mri(CONTROL_ADHD_DATASET_PATH)
-
-    namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "control_adhd"]
-    dataset   = [parkinson, control, control_ixi, alzheimer, adhd, control_adhd]
+def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") -> None:
+    dataset = list(data.values())
+    namings = list(data.keys())
 
     s = np.array([img.shape for img in dataset])
 
@@ -179,7 +172,22 @@ def generate_reduced_dataset(plane: str="axial") -> None:
         plt.imsave(pth, img)
 
 if __name__ == "__main__":
+    parkinson = read_mri(PARKINSON_DATASET_PATH)
+    autism    = read_mri(AUTISM_DATASET_PATH)
+    control   = read_mri(CONTROL_DATASET_PATH)
+    control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
+    alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
+    adhd      = read_mri(ADHD_DATASET_PATH)
+    # control_adhd = read_mri(CONTROL_ADHD_DATASET_PATH)
+
+    namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "autism"]
+    dataset   = [parkinson, control, control_ixi, alzheimer, adhd, autism]
+
+    data = dict(zip(namings, dataset))
+    dataset = list(data.values())
+    namings = list(data.keys())
+
     for plane in ["axial", "sagital", "frontal"]:
         print(plane)
-        generate_reduced_dataset(plane)
+        generate_reduced_dataset(data, plane)
         print("\n\n")
