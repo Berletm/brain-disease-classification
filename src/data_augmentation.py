@@ -33,8 +33,9 @@ class AxisHolder(Dataset):
             elif "parkinson" in img: self.labels.append(1)
             elif "alzheimer" in img: self.labels.append(2)
             elif "adhd"      in img: self.labels.append(3)
+            elif "sclerosis" in img: self.labels.append(4)
 
-        self.counts = [self.labels.count(i) for i in range(4)]
+        self.counts = [self.labels.count(i) for i in range(5)]
 
     def __len__(self) -> int:
         return len(self.images)

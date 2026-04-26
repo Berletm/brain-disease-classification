@@ -5,5 +5,6 @@ CONTROL_IXI_DATASET_PATH = r"/run/media/berlet/throwdownyourtears/mri_dataset/co
 ADHD_DATASET_PATH      = r"/run/media/berlet/throwdownyourtears/mri_dataset/adhd"
 CONTROL_ADHD_DATASET_PATH = r"/run/media/berlet/throwdownyourtears/mri_dataset/control_adhd"
 ALZHEIMER_DATASET_PATH = r"/run/media/berlet/throwdownyourtears/mri_dataset/alzheimer"
+SCLEROSIS_DATASET_PATH = r"/run/media/berlet/throwdownyourtears/mri_dataset/sclerosis"
 REDUCED_DATASET_PATH   = r"../dataset"
 SAVED_MODELS_PATH      = r"../models"

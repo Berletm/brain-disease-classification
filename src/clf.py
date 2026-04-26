@@ -26,7 +26,6 @@ from tqdm import tqdm
 import sys
 torch.manual_seed(0)
 
-os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class CrossAttention(nn.Module):
@@ -296,7 +295,7 @@ def train_multi(n_epoch:  int,
                 lr: float,
                 train_loader: DataLoader,
                 val_loader  : DataLoader,
-                weights:List|np.ndarray=[1.0, 1.0, 1.0, 1.0], save:bool=True) -> Tuple[nn.Module, np.ndarray]:
+                weights:List|np.ndarray=[1.0, 1.0, 1.0, 1.0, 1.0], save:bool=True) -> Tuple[nn.Module, np.ndarray]:
     model = model.to(device)
     optimizer = AdamW([
         {'params': model.clf_head.parameters(), 'lr': lr},
@@ -438,6 +437,7 @@ def cross_validate_pytorch(
 ):
     labels = np.array(dataset.labels)
     indices = np.arange(len(dataset))
+    weights = 1 / np.array(dataset.counts)
 
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
@@ -463,7 +463,7 @@ def cross_validate_pytorch(
 
         model = model_class(**model_params).to(device) 
 
-        model = train_func(n_epoch=50, model=model, train_loader=train_loader, val_loader=val_loader, lr=0.007133483490519629)
+        model = train_func(n_epoch=50, model=model, train_loader=train_loader, val_loader=val_loader, lr=0.007133483490519629, weights=weights)
 
         model.eval()
         val_preds = []
@@ -648,19 +648,19 @@ def main() -> None:
     train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
     test_loader  = DataLoader(val_ds,  batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
 
-    model = MultiCLF(base_model="convnext_base", num_classes=4, hidden_dim=64, attention_heads=16)
+    # model = MultiCLF(base_model="convnext_base", num_classes=5, hidden_dim=64, attention_heads=16)
 
-    # model_params = {"base_model": "convnext_base", "num_classes": 4, "hidden_dim": 64, "attention_heads": 16}
+    model_params = {"base_model": "convnext_base", "num_classes": 5, "hidden_dim": 64, "attention_heads": 16}
 
-    # result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
+    result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
 
-    # with open("models/result.txt", "w+") as file:
-    #     file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
-    #     file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
-    #     file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
-    #     file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
+    with open("../models/result.txt", "w+") as file:
+        file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
+        file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
+        file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
+        file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
 
-    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
+    # model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
 
     # study = optuna.create_study(direction='maximize')
     # study.optimize(objective, n_trials=100, timeout=4800)

@@ -50,13 +50,12 @@ class MPCA:
         if not self.initialized:
             raise RuntimeError("Model should be fitted first")
         
-        X = dataset
         n = len(dataset)
         mats = [self.axial_mat, self.frontal_mat, self.sagital_mat]
         
         projected_all = []
         for i in range(n):
-            proj = X[i]
+            proj = dataset[i]
             if self.projection_mode == "sagital":
                 proj = self.n_mode_prod(proj, self.sagital_mat.T, 2)
             elif self.projection_mode == "frontal":
@@ -84,10 +83,6 @@ class MPCA:
         
         mats = [self.axial_mat, self.frontal_mat, self.sagital_mat]
 
-        # data centering
-        self.mean_tensor = np.mean(dataset, axis=0)
-        X = dataset
-
         # metric
         prev_total_variance = -1.0
         for it in range(1, self.max_iter + 1):
@@ -96,7 +91,7 @@ class MPCA:
                 covariance_mat = np.zeros((orig_dims[m], orig_dims[m]))
 
                 for i in range(n):
-                    temp_proj = X[i]
+                    temp_proj = dataset[i]
                     for o in others:
                         temp_proj = self.n_mode_prod(temp_proj, mats[o].T, o)
 
@@ -110,7 +105,7 @@ class MPCA:
             
             total_variance = 0.0
             for i in range(n):
-                proj = X[i]
+                proj = dataset[i]
                 for m in range(3):
                     proj = self.n_mode_prod(proj, mats[m].T, m)
                 total_variance += np.linalg.norm(proj) ** 2
@@ -172,7 +167,7 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") ->
     for dset in dataset:
         shifted_dset = dset - np.mean(dset, axis=0)
         for img in shifted_dset:
-            new_img = resize(img, min_s, order=1, preserve_range=True, anti_aliasing=True)
+            new_img = resize(img, min_s, order=3, preserve_range=True, anti_aliasing=True)
             temp.append(new_img)
     
     resized_dataset = np.array(temp)
@@ -196,7 +191,8 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") ->
     shape = plane2shape[plane]
     
     mpca = MPCA(15, shape, plane)
-    reduced_dataset = mpca.fit_transform(resized_dataset)
+    mpca.load(os.path.join(SAVED_MODELS_PATH, "mpca", f"{plane}_mpca.npz"))
+    reduced_dataset = mpca.transform(resized_dataset)
     
     if not os.path.exists(SAVED_MODELS_PATH):
         os.mkdir(SAVED_MODELS_PATH)
@@ -239,9 +235,10 @@ if __name__ == "__main__":
     control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
     alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
     adhd      = read_mri(ADHD_DATASET_PATH)
+    sclerosis  = read_mri(SCLEROSIS_DATASET_PATH)
 
-    namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "autism"]
-    dataset   = [parkinson, control, control_ixi, alzheimer, adhd, autism]
+    namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "autism", "sclerosis"]
+    dataset   = [parkinson, control, control_ixi, alzheimer, adhd, autism, sclerosis]
 
     data = dict(zip(namings, dataset))
 
