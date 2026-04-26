@@ -13,7 +13,7 @@ from torch.optim import AdamW
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score, precision_score
 from torch.utils.data import DataLoader, random_split, Subset
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from utils import SAVED_MODELS_PATH
 from logger import Tee
 import optuna
@@ -26,98 +26,8 @@ from tqdm import tqdm
 import sys
 torch.manual_seed(0)
 
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-class SimpleCLF(nn.Module):
-    def __init__(self, input_shape: int=100, output_shape: int=3):
-        super().__init__()
-
-        self.layer1 = nn.Linear(in_features=input_shape, out_features=256)
-        self.layer2 = nn.Linear(in_features=256, out_features=512)
-        self.layer3 = nn.Linear(in_features=512, out_features=output_shape)
-        self.activation = nn.ReLU()
-        self.dropout = nn.Dropout(0.3)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.layer1(x)
-        x = self.activation(x)
-        x = self.dropout(x)
-        x = self.layer2(x)
-        x = self.activation(x)
-        x = self.dropout(x)
-        x = self.layer3(x)
-
-        return x
-
-class ConvCLF(nn.Module):
-    def __init__(self, input_shape=(128, 128, 3)):
-        super().__init__()
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, padding="same"),
-            nn.BatchNorm2d(32),
-            nn.ReLU()
-        )
-
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=3, padding="same"),
-            nn.BatchNorm2d(64),
-            nn.ReLU()
-        )
-
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3, padding="same"),
-            nn.BatchNorm2d(128),
-            nn.ReLU()
-        )
-
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.gap = nn.AdaptiveAvgPool2d((1, 1))
-
-        self.flatten = nn.Flatten()
-        self.fc = nn.Sequential(
-            nn.Dropout(0.3),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 3)
-        )
-
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(x)
-        x = self.pool(x)
-        x = self.conv2(x)
-        x = self.pool(x)
-        x = self.conv3(x)
-        x = self.pool(x)
-        x = self.gap(x)
-        x = self.flatten(x)
-        x = self.fc(x)
-
-        return x
-
-    def predict(self, x: np.ndarray) -> np.ndarray:
-        x_tensor = torch.tensor(x, dtype=torch.float32).to(device)
-        output = self.softmax(self.forward(x_tensor))
-
-        return torch.argmax(output, dim=1).cpu().numpy()
-
-class Attention(nn.Module):
-    def __init__(self, feature_dim:int=512, hidden_dim:int=256, num_classes:int=4):
-        super().__init__()
-        self.attn_pool = nn.Sequential(
-            nn.Linear(feature_dim * 3, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 3),
-            nn.Softmax(dim=-1)
-        )
-
-    def forward(self, features) -> torch.Tensor:
-        weights = self.attn_pool(features)
-
-        return weights
 
 class CrossAttention(nn.Module):
     def __init__(self, feature_dim:int=512, heads_num:int=4):
@@ -163,6 +73,10 @@ class MultiCLF(nn.Module):
     def __init__(self, base_model:str="resnet18", hidden_dim:int=256, num_classes:int=4, attention_heads:int=4):
         super().__init__()
 
+        self.num_classes = num_classes
+        self.hidden_dim  = hidden_dim
+        self.feature_dim = None
+        
         if "resnet" in base_model:
             if base_model == "resnet18":
                 self.model_ax = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
@@ -211,6 +125,7 @@ class MultiCLF(nn.Module):
                 self.model_sag = models.convnext_small(weights=models.ConvNeXt_Small_Weights.DEFAULT)
 
             features_dim = self.model_ax.classifier[2].in_features 
+            self.feature_dim = features_dim
 
             self.model_ax.classifier[2] = nn.Identity()
             self.model_front.classifier[2] = nn.Identity()
@@ -241,10 +156,16 @@ class MultiCLF(nn.Module):
         front_logits = self.model_front(front)
         sag_logits   = self.model_sag(sag)
 
-        logits = torch.cat([ax_logits, front_logits, sag_logits], dim=0)
+        logits = torch.stack([ax_logits, front_logits, sag_logits], dim=1)
 
-        fused_logits = self.cross_attention(ax_logits, logits)
-
+        ax_attention_logits = self.cross_attention(ax_logits, logits)
+        front_attention_logits = self.cross_attention(front_logits, logits)
+        sag_attention_logits = self.cross_attention(sag_logits, logits)
+        
+        attention_logits = torch.stack([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
+        
+        fused_logits = torch.mean(attention_logits, dim=1)
+        
         return self.clf_head(fused_logits)
 
     def predict(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> np.ndarray:
@@ -395,15 +316,15 @@ def train_multi(n_epoch:  int,
     best_metric = 0.0
 
     log_counter = 1
-    f_name = f"models/z{log_counter}"
+    f_name = f"../models/z{log_counter}"
     if not os.path.exists(f_name):
         os.mkdir(f_name)
         log_file = open(os.path.join(f_name, "training.log"), "w+")
     else:
         while True:
-            f_name = f"models/z{log_counter}"
+            f_name = f"../models/z{log_counter}"
             if not os.path.exists(f_name):
-                os.mkdir(f"models/z{log_counter}")
+                os.mkdir(f"../models/z{log_counter}")
                 log_file = open(os.path.join(f_name, "training.log"), "w+")
                 break
             else: log_counter += 1; continue
@@ -589,7 +510,7 @@ def objective(trial: optuna.Trial) -> float:
     x_base_transforms = tv.Compose(
     [
         tv.ToTensor(),
-        tv.Resize(224),
+        tv.Resize((224, 224)),
         tv.Normalize(mean=[0.485, 0.456, 0.406],
                      std=[0.229, 0.224, 0.225]),
     ])
@@ -669,7 +590,7 @@ def main() -> None:
     x_base_transforms = tv.Compose(
     [
         tv.ToTensor(),
-        tv.Resize(224),
+        tv.Resize((224, 224)),
         tv.Normalize(mean=[0.485, 0.456, 0.406],
                      std=[0.229, 0.224, 0.225]),
     ])
@@ -724,22 +645,22 @@ def main() -> None:
     g = torch.Generator()
     g.manual_seed(0)
     
-    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    test_loader  = DataLoader(val_ds,  batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
 
     model = MultiCLF(base_model="convnext_base", num_classes=4, hidden_dim=64, attention_heads=16)
 
-    model_params = {"base_model": "convnext_base", "num_classes": 4, "hidden_dim": 64, "attention_heads": 16}
+    # model_params = {"base_model": "convnext_base", "num_classes": 4, "hidden_dim": 64, "attention_heads": 16}
 
-    result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
+    # result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
 
-    with open("models/result.txt", "w+") as file:
-        file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
-        file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
-        file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
-        file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
+    # with open("models/result.txt", "w+") as file:
+    #     file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
+    #     file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
+    #     file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
+    #     file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
 
-    # model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
+    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
 
     # study = optuna.create_study(direction='maximize')
     # study.optimize(objective, n_trials=100, timeout=4800)

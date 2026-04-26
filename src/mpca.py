@@ -50,7 +50,7 @@ class MPCA:
         if not self.initialized:
             raise RuntimeError("Model should be fitted first")
         
-        X = dataset - self.mean_tensor
+        X = dataset
         n = len(dataset)
         mats = [self.axial_mat, self.frontal_mat, self.sagital_mat]
         
@@ -68,7 +68,8 @@ class MPCA:
                     proj = self.n_mode_prod(proj, mats[m].T, m)
             projected_all.append(proj)
 
-        return np.array(projected_all)
+        res = np.array(projected_all)
+        return res
 
     def fit(self, dataset: np.ndarray) -> None:
         n, i_dim, j_dim, k_dim = dataset.shape
@@ -85,7 +86,7 @@ class MPCA:
 
         # data centering
         self.mean_tensor = np.mean(dataset, axis=0)
-        X = dataset - self.mean_tensor
+        X = dataset
 
         # metric
         prev_total_variance = -1.0
@@ -152,7 +153,7 @@ def read_mri(filepath: str) -> np.ndarray:
     return np.array(data)
 
 def normalize_image(img):
-    vmin, vmax = np.percentile(img, (5, 95))
+    vmin, vmax = np.percentile(img, (2, 98))
 
     img_norm = (img - vmin) / (vmax - vmin)
 
@@ -166,14 +167,16 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") ->
 
     s = [img.shape for img in dataset]
     _, *min_s = np.min(s, axis=0)
-
+    
     temp = []
     for dset in dataset:
-        for img in dset:
+        shifted_dset = dset - np.mean(dset, axis=0)
+        for img in shifted_dset:
             new_img = resize(img, min_s, order=1, preserve_range=True, anti_aliasing=True)
             temp.append(new_img)
     
     resized_dataset = np.array(temp)
+    resized_dataset = np.array([normalize_image(x) for x in resized_dataset])
 
     w, h = min_s[:2]
     c = 3
@@ -191,8 +194,10 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") ->
     }
     axis  = plane2axis[plane]
     shape = plane2shape[plane]
+    
     mpca = MPCA(15, shape, plane)
     reduced_dataset = mpca.fit_transform(resized_dataset)
+    
     if not os.path.exists(SAVED_MODELS_PATH):
         os.mkdir(SAVED_MODELS_PATH)
     pth = os.path.join(SAVED_MODELS_PATH, "mpca")
@@ -201,7 +206,13 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") ->
     mpca.save(os.path.join(pth, f"{plane}_mpca.npz"))
 
     sizes = [len(dset) for dset in dataset]
-    ranges = [(i, i + sz) for i, sz in enumerate(np.cumsum(sizes) - sizes)]
+    ranges = []
+
+    l, r = 0, 0
+    for i in range(len(sizes)):
+        r += sizes[i]
+        ranges.append((l, r))
+        l = r
 
     for i, img in enumerate(reduced_dataset):
         img = np.squeeze(img)
@@ -228,7 +239,6 @@ if __name__ == "__main__":
     control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
     alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
     adhd      = read_mri(ADHD_DATASET_PATH)
-    adhd = adhd[:len(adhd)//2]
 
     namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "autism"]
     dataset   = [parkinson, control, control_ixi, alzheimer, adhd, autism]
