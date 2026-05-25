@@ -7,7 +7,7 @@ from skimage.transform import resize
 from utils import *
 
 class MPCA:
-    def __init__(self, max_iter: int, ranks: tuple, projection_mode: str="axial", tol: float = 1e-6):
+    def __init__(self, max_iter: int = 15, ranks: tuple = (), projection_mode: str="axial", tol: float = 1e-6):
         self.max_iter = max_iter
         
         self.ranks = np.array(ranks)
@@ -15,13 +15,12 @@ class MPCA:
         self.axial_mat   = None
         self.frontal_mat = None
         self.sagital_mat = None
+        self.orig_shape  = None
         
-        self.mean_tensor = None        
-
         self.tol = tol
         self.projection_mode  = projection_mode
         self.initialized = False
-        
+
     @staticmethod
     def unfold(tensor: np.ndarray, mode: int) -> np.ndarray:
         return np.reshape(np.moveaxis(tensor, mode, 0), (tensor.shape[mode], -1))
@@ -75,6 +74,8 @@ class MPCA:
         r1, r2, r3 = self.ranks
         orig_dims = [i_dim, j_dim, k_dim]
         
+        self.orig_shape = tuple(orig_dims)
+        
         r1, r2, r3 = self.ranks
         # projection matrices U_i = I
         self.axial_mat   = np.eye(i_dim)[:, :r1]
@@ -121,11 +122,12 @@ class MPCA:
     
     def load(self, pth: str) -> None:
         data = np.load(pth, allow_pickle=True)
-        self.mean_tensor = data["mean_tensor"]
         self.axial_mat, self.frontal_mat, self.sagital_mat = data["axial_mat"], data["frontal_mat"], data["sagital_mat"]
         self.projection_mode = str(data["projection_mode"])
         self.ranks = data["ranks"]
+        self.orig_shape = tuple(data["orig_shape"])
         self.initialized = True
+
             
     def save(self, pth: str) -> None:
         if not self.initialized:
@@ -134,9 +136,9 @@ class MPCA:
                             axial_mat=self.axial_mat, 
                             frontal_mat=self.frontal_mat, 
                             sagital_mat=self.sagital_mat,
-                            mean_tensor=self.mean_tensor, 
                             ranks=self.ranks, 
-                            projection_mode=self.projection_mode)
+                            projection_mode=self.projection_mode,
+                            orig_shape=self.orig_shape)
     
 def read_mri(filepath: str) -> np.ndarray:
     data = []
@@ -156,15 +158,15 @@ def normalize_image(img):
 
     return img_norm
 
-def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") -> None:
-    dataset = list(data.values())
-    namings = list(data.keys())
-
-    s = [img.shape for img in dataset]
-    _, *min_s = np.min(s, axis=0)
-    
+def unify_dataset(data: np.ndarray, shape: tuple=None) -> np.ndarray:
+    if shape is None:
+        s = [img.shape for img in data]
+        _, *min_s = np.min(s, axis=0)
+    else:
+        min_s = shape
+        
     temp = []
-    for dset in dataset:
+    for dset in data:
         shifted_dset = dset - np.mean(dset, axis=0)
         for img in shifted_dset:
             new_img = resize(img, min_s, order=3, preserve_range=True, anti_aliasing=True)
@@ -172,44 +174,53 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") ->
     
     resized_dataset = np.array(temp)
     resized_dataset = np.array([normalize_image(x) for x in resized_dataset])
-
     w, h = min_s[:2]
-    c = 3
-    plane2shape = \
-    {
-        "sagital": (w, h, c),
-        "frontal": (w, c, h),
-        "axial"  : (c, w, h)
-    }
-    plane2axis = \
-    {
-        "sagital": (0, 1, 2),
-        "frontal": (0, 2, 1),
-        "axial"  : (1, 2, 0)
-    }
-    axis  = plane2axis[plane]
-    shape = plane2shape[plane]
     
-    mpca = MPCA(15, shape, plane)
-    mpca.load(os.path.join(SAVED_MODELS_PATH, "mpca", f"{plane}_mpca.npz"))
-    reduced_dataset = mpca.transform(resized_dataset)
-    
-    if not os.path.exists(SAVED_MODELS_PATH):
-        os.mkdir(SAVED_MODELS_PATH)
-    pth = os.path.join(SAVED_MODELS_PATH, "mpca")
-    if not os.path.exists(pth):
-        os.mkdir(pth)
-    mpca.save(os.path.join(pth, f"{plane}_mpca.npz"))
+    return resized_dataset, w, h
 
-    sizes = [len(dset) for dset in dataset]
+def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial", precomputed: bool = False) -> None:
+    dataset = list(data.values())
+    namings = list(data.keys())
+        
+    mpca_pth = os.path.join(SAVED_MODELS_PATH, "mpca", f"{plane}_mpca.npz")
+    
+    if not os.path.exists(os.path.dirname(mpca_pth)):
+        os.makedirs(os.path.dirname(mpca_pth))
+        
+    if not precomputed:
+        unified_dataset, w, h = unify_dataset(dataset)
+        c = 3
+        
+        plane2shape = {"sagital": (w, h, c), "frontal": (w, c, h), "axial"  : (c, w, h)}
+        shape = plane2shape[plane]
+        
+        mpca = MPCA(15, shape, plane)
+        
+        reduced_dataset = mpca.fit_transform(unified_dataset)
+            
+        mpca.save(mpca_pth)
+    else:
+        mpca = MPCA(15)
+        mpca.load(mpca_pth)
+        
+        unified_dataset, _, _ = unify_dataset(dataset, shape=mpca.orig_shape)
+        reduced_dataset = mpca.transform(unified_dataset)
+        
+    sizes  = [len(dset) for dset in dataset]
     ranges = []
 
     l, r = 0, 0
-    for i in range(len(sizes)):
-        r += sizes[i]
+    for s in sizes:
+        r += s
         ranges.append((l, r))
         l = r
+        
+    out_dir = os.path.join(REDUCED_DATASET_PATH, plane)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
 
+    plane2axis  = {"sagital": (0, 1, 2), "frontal": (0, 2, 1), "axial"  : (1, 2, 0)}
+    axis  = plane2axis[plane]
     for i, img in enumerate(reduced_dataset):
         img = np.squeeze(img)
         img = np.transpose(img, axis)
@@ -221,12 +232,9 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial") ->
             if left <= i < right:
                 name_ind = j
                 break
-
+            
         name = namings[name_ind]
-        pth = os.path.join(REDUCED_DATASET_PATH, plane)
-        if not os.path.exists(pth):
-            os.mkdir(pth)
-        plt.imsave(os.path.join(pth, f"{name}_{i}.png"), img)
+        plt.imsave(os.path.join(out_dir, f"{name}_{i}.png"), img)
 
 if __name__ == "__main__":
     parkinson = read_mri(PARKINSON_DATASET_PATH)
@@ -244,5 +252,5 @@ if __name__ == "__main__":
 
     for plane in ["axial", "sagital", "frontal"]:
         print(plane)
-        generate_reduced_dataset(data, plane)
+        generate_reduced_dataset(data, plane, precomputed=False)
         print("\n\n")

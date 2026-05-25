@@ -11,7 +11,7 @@ import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score, precision_score
+from sklearn.metrics import confusion_matrix, f1_score, recall_score, precision_score
 from torch.utils.data import DataLoader, random_split, Subset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from utils import SAVED_MODELS_PATH
@@ -28,13 +28,14 @@ torch.manual_seed(0)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class CrossAttention(nn.Module):
+class MultiHeadAttention(nn.Module):
     def __init__(self, feature_dim:int=512, heads_num:int=4):
         super().__init__()
 
         self.feature_dim = feature_dim
         self.heads_num = heads_num
         self.head_dim  = feature_dim // self.heads_num
+        self.scale = self.head_dim ** 0.5
         self.planes    = 3
 
         self.q_proj = nn.Linear(feature_dim, feature_dim)
@@ -50,16 +51,15 @@ class CrossAttention(nn.Module):
         batch_size = q_features.size(0)
 
         Q = self.q_proj(q_features)  # (512 x 512) * (512 x 1) = (512 x 1)
-        Q = Q.view(batch_size, self.heads_num, self.head_dim) # (4 x 128) ~ 4 vec 128 x 1
-        
         K = self.k_proj(kv_features) # (512 x 512) * (512 x 3) = (512 x 3)
-        K = K.view(batch_size, self.planes, self.heads_num, self.head_dim) # 3 x 4 x 128 = 3 x (4 x 128) ~ 3 mat 4 vecs 128 x 1
-        
         V = self.v_proj(kv_features) # (512 x 512) * (512 x 3) = (512 x 3)
+
+        Q = Q.view(batch_size, self.heads_num, self.head_dim) # (4 x 128) ~ 4 vec 128 x 1
+        K = K.view(batch_size, self.planes, self.heads_num, self.head_dim) # 3 x 4 x 128 = 3 x (4 x 128) ~ 3 mat 4 vecs 128 x 1
         V = V.view(batch_size, self.planes, self.heads_num, self.head_dim) # 3 x 4 x 128 = 3 x (4 x 128) ~ 3 mat 4 vecs 128 x 1
 
         attn_scores = torch.einsum('bhd,bkhd->bhk', Q, K) # (4 x 3) ~ 4 vecs w scalars for planes
-        attn_scores = attn_scores / (Q.shape[-1] ** 0.5)  # normalization from "Attetion is all you need"
+        attn_scores /= self.scale  # normalization from "Attetion is all you need"
         attn_probs = self.softmax(attn_scores)
         attn_probs = self.dropout(attn_probs)
 
@@ -137,7 +137,7 @@ class MultiCLF(nn.Module):
                 for param in model.features[-1].parameters():
                     param.requires_grad = True
 
-        self.cross_attention = CrossAttention(features_dim, attention_heads)
+        self.multi_head_attention = MultiHeadAttention(features_dim, attention_heads)
 
         self.clf_head = nn.Sequential(
             nn.Linear(features_dim, hidden_dim),
@@ -157,9 +157,9 @@ class MultiCLF(nn.Module):
 
         logits = torch.stack([ax_logits, front_logits, sag_logits], dim=1)
 
-        ax_attention_logits = self.cross_attention(ax_logits, logits)
-        front_attention_logits = self.cross_attention(front_logits, logits)
-        sag_attention_logits = self.cross_attention(sag_logits, logits)
+        ax_attention_logits = self.multi_head_attention(ax_logits, logits)
+        front_attention_logits = self.multi_head_attention(front_logits, logits)
+        sag_attention_logits = self.multi_head_attention(sag_logits, logits)
         
         attention_logits = torch.stack([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
         
@@ -600,7 +600,7 @@ def main() -> None:
     weights = 1 / np.array(ds.counts)
     print(ds.counts)
 
-    train_ds, val_ds = random_split(ds, [0.8, 0.2])
+    train_ds, val_ds = random_split(ds, [0.7, 0.3])
 
     train_transforms = tv.Compose([
         tv.RandomAffine(
@@ -648,19 +648,19 @@ def main() -> None:
     train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
     test_loader  = DataLoader(val_ds,  batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
 
-    # model = MultiCLF(base_model="convnext_base", num_classes=5, hidden_dim=64, attention_heads=16)
+    model = MultiCLF(base_model="convnext_base", num_classes=5, hidden_dim=64, attention_heads=16)
 
-    model_params = {"base_model": "convnext_base", "num_classes": 5, "hidden_dim": 64, "attention_heads": 16}
+    # model_params = {"base_model": "convnext_base", "num_classes": 5, "hidden_dim": 64, "attention_heads": 16}
 
-    result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
+    # result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
 
-    with open("../models/result.txt", "w+") as file:
-        file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
-        file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
-        file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
-        file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
+    # with open("../models/result.txt", "w+") as file:
+    #     file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
+    #     file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
+    #     file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
+    #     file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
 
-    # model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
+    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
 
     # study = optuna.create_study(direction='maximize')
     # study.optimize(objective, n_trials=100, timeout=4800)
