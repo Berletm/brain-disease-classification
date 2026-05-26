@@ -5,7 +5,7 @@ from typing import Tuple
 
 from data_augmentation import AxisHolder
 from torch.utils.data import random_split, DataLoader
-from clf import MultiCLF, train_multi, validate, CrossAttention
+from clf import MultiCLF, train_multi, validate, MultiHeadAttention
 from utils import REDUCED_DATASET_PATH, SAVED_MODELS_PATH
 import torchvision.transforms as tv
 import torchvision.transforms.v2 as tv2
@@ -70,7 +70,7 @@ def main() -> None:
 
     test_loader  = DataLoader(val_ds,  batch_size=1, shuffle=True, num_workers=2, pin_memory=True)
 
-    model: MultiCLF = torch.load(SAVED_MODELS_PATH + "/bestofthebest.pth", "cuda", weights_only=False)
+    model: MultiCLF = torch.load(SAVED_MODELS_PATH + "/z2/best_multi.pth", "cuda", weights_only=False)
 
     weights = torch.tensor(weights, dtype=torch.float32, device="cuda")
     criterion = torch.nn.CrossEntropyLoss(weight=weights)
@@ -79,7 +79,7 @@ def main() -> None:
     acc, f1, recall, precision = metrics
     print(f1, recall, precision)
     print(f"loss: {loss:.4f} | acc: {acc:.4f}")
-    print(f"confusion mat: {conf}")
+    print(f"confusion mat:\n {conf}")
 
 if __name__ == "__main__":
     main()
