@@ -28,6 +28,9 @@ torch.manual_seed(0)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+g = torch.Generator()
+g.manual_seed(0)
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, feature_dim:int=512, heads_num:int=4):
         super().__init__()
@@ -295,7 +298,9 @@ def train_multi(n_epoch:  int,
                 lr: float,
                 train_loader: DataLoader,
                 val_loader  : DataLoader,
-                weights:List|np.ndarray=[1.0, 1.0, 1.0, 1.0, 1.0], save:bool=True) -> Tuple[nn.Module, np.ndarray]:
+                weights: torch.Tensor, 
+                save:bool=True,
+                patience:int = 5) -> MultiCLF:
     model = model.to(device)
     optimizer = AdamW([
         {'params': model.clf_head.parameters(), 'lr': lr},
@@ -303,11 +308,8 @@ def train_multi(n_epoch:  int,
         {'params': [p for p in model.model_sag.parameters() if p.requires_grad], 'lr': 1e-6},
         {'params': [p for p in model.model_front.parameters() if p.requires_grad], 'lr': 1e-6},
     ], weight_decay=1e-4)
-    patience = 5
-    weights = torch.tensor(weights, dtype=torch.float32, device=device)
-    criterion = CrossEntropyLoss(weight=weights)
-    # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, eta_min=1e-6)
-    scheduler2 = ReduceLROnPlateau(optimizer, patience=patience, min_lr=1e-6, factor=0.5)
+    criterion = CrossEntropyLoss(weight=weights, label_smoothing=0.05)
+    scheduler = ReduceLROnPlateau(optimizer, patience=2)
 
     counter  = 0
     best_loss = float("inf")
@@ -363,6 +365,7 @@ def train_multi(n_epoch:  int,
         val_loss, metrics, cm = validate(model, criterion, val_loader)
 
         val_acc, f1, recall, precision = metrics
+        scheduler.step(f1)
 
         if f1 > best_metric:
             counter = 0
@@ -373,7 +376,6 @@ def train_multi(n_epoch:  int,
                 torch.save(model, os.path.join(SAVED_MODELS_PATH, f"z{log_counter}", "best_multi.pth"))
         else: counter += 1
 
-        scheduler2.step(f1)
         print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f} | f1 weighted: {f1:.4f} | recall: {recall:.4f} | precision: {precision:.4f}")
     log_file.close()
     sys.stdout = sys.__stdout__
@@ -421,9 +423,9 @@ def validate(model: nn.Module, criterion: nn.Module, val_loader: DataLoader) -> 
         val_loss /= total
 
     cm = confusion_matrix(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred, average="weighted")
-    recall = recall_score(y_true, y_pred, average="weighted")
-    precision = precision_score(y_true, y_pred, average="weighted", zero_division=0)
+    f1 = f1_score(y_true, y_pred, average="macro")
+    recall = recall_score(y_true, y_pred, average="macro")
+    precision = precision_score(y_true, y_pred, average="macro", zero_division=0)
 
     return val_loss, (val_acc, f1, recall, precision), cm
 
@@ -597,10 +599,10 @@ def main() -> None:
 
     ds = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
 
-    weights = 1 / np.array(ds.counts)
+    weights = torch.tensor(1 / np.array(ds.counts), dtype=torch.float32, device=device)
     print(ds.counts)
 
-    train_ds, val_ds = random_split(ds, [0.7, 0.3])
+    train_ds, val_ds, test_ds = random_split(ds, [0.7, 0.2, 0.1], generator=g)
 
     train_transforms = tv.Compose([
         tv.RandomAffine(
@@ -636,40 +638,51 @@ def main() -> None:
 
         tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
         tv.ToTensor(),
-
         tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
     train_ds.x_transforms = train_transforms
-
-    g = torch.Generator()
-    g.manual_seed(0)
     
     train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    test_loader  = DataLoader(val_ds,  batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    val_loader   = DataLoader(val_ds,  batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    test_loader  = DataLoader(test_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    ds_loader = DataLoader(ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
 
     model = MultiCLF(base_model="convnext_base", num_classes=5, hidden_dim=64, attention_heads=16)
 
-    # model_params = {"base_model": "convnext_base", "num_classes": 5, "hidden_dim": 64, "attention_heads": 16}
-
-    # result = cross_validate_pytorch(dataset=ds, model_class=MultiCLF, train_func=train_multi, model_params=model_params, n_splits=5, batch_size=16)
-
-    # with open("../models/result.txt", "w+") as file:
-    #     file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
-    #     file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
-    #     file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
-    #     file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
-    # print(sum(p.numel() for p in model.multi_head_attention.parameters() if p.requires_grad))
-    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=test_loader, weights=weights, lr=0.007133483490519629)
-
-    # study = optuna.create_study(direction='maximize')
-    # study.optimize(objective, n_trials=100, timeout=4800)
-
-    # df = study.trials_dataframe()
-    # df.to_csv("optuna_results2.csv", index=False)
-
-    # print(f"Best F1: {study.best_value}")
-    # print(f"Best params: {study.best_params}")
-
+    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=val_loader, weights=weights, lr=0.007133483490519629, patience=5)
+    
+    criterion = CrossEntropyLoss(weight=weights)
+    loss, (acc, f1, recall, precision), cm = validate(model, criterion, test_loader)
+    print(f"""
+          loss: {loss:.4f},
+          acc : {acc:.4f},
+          F1  : {f1:.4f},
+          recall: {recall:.4f},
+          precision: {precision:.4f},
+          """)
+    print(cm)
+    
+    
+    model.clf_head = nn.Identity()
+    model.eval()
+    for loader, name in zip([train_loader, val_loader, test_loader], ["train", "val", "test"]):
+        embeddings = []
+        labels = []
+        with torch.no_grad():
+            for batch, label in loader:
+                ax, front, sag = batch
+                ax = ax.to(device)
+                front = front.to(device)
+                sag = sag.to(device)
+                
+                embeddings_batch = model((ax, front, sag))
+                embeddings.extend(embeddings_batch.cpu().squeeze(0).tolist())
+                labels.extend(label.cpu().squeeze(0).tolist())
+        labels = np.array(labels)
+        embeddings = np.array(embeddings)
+        np.savetxt(f"../embeddings/{name}_embed.txt", embeddings)
+        np.savetxt(f"../embeddings/{name}_label.txt", labels, fmt="%d")
+    
 if __name__ == "__main__":
     main()

@@ -1,6 +1,6 @@
 \documentclass[twocolumn]{article}
 
-\usepackage[margin=1.3cm]{geometry}
+\usepackage[margin=1.2cm]{geometry}
 \usepackage[utf8]{inputenc}
 \usepackage[T2A]{fontenc}
 \usepackage[russian]{babel} 
@@ -12,6 +12,7 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{xcolor}
 \usepackage{csquotes}
+\usepackage{tabularx}
 \usepackage[backend=biber, style=numeric]{biblatex}
 \addbibresource{cites.bib}
 
@@ -184,7 +185,87 @@
 Результирующий агрегированный вектор признаков затем подается на вход блока классификации (classification head) для формирования итогового прогноза.
 
 \subsection{Алгоритм обучения}
-Описание обучения.
+На этапе обучения данные были разбиты на 3 подвыборки: обучающая, валидационная и тестовая в соотношении 0.7, 0.2, 0.1 соответственно. 
+К обучающим данным на этапе обучения применялись техники аугментации из таблицы \ref{tab:augmentation}.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Применяемые техники аугментации данных}
+    \label{tab:augmentation}
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabularx}{0.5\textwidth}{>{\ttfamily\footnotesize\raggedright\arraybackslash}X}
+        \toprule
+        \textnormal{\textbf{Метод и параметры}} \\
+        \midrule
+        \textnormal{\textbf{RandomAffine}} \\
+        \quad degrees=(-7, 7), translate=(0.08, 0.08), \\
+        \quad scale=(0.92, 1.10), shear=(-7, 7), \\ 
+        \quad interpolation=BICUBIC, fill=0 \\
+        \addlinespace
+        
+        \textnormal{\textbf{ElasticTransform}} \\
+        \quad alpha=120, sigma=8, interpolation=BICUBIC, fill=0 \\
+        \addlinespace
+        
+        \textnormal{\textbf{RandomHorizontalFlip}} \\
+        \quad p=0.5 \\
+        \addlinespace
+        
+        \textnormal{\textbf{RandomVerticalFlip}} \\
+        \quad p=0.15 \\
+        \addlinespace
+        
+        \textnormal{\textbf{ColorJitter}} \\
+        \quad brightness=(0.7, 1.4), contrast=(0.75, 1.35), \\
+        \quad saturation=0, hue=0 \\
+        \addlinespace
+        
+        \textnormal{\textbf{GaussianNoise}} \\
+        \quad sigma=0.015 \\
+        \addlinespace
+        
+        \textnormal{\textbf{GaussianBlur}} \\
+        \quad kernel\_size=3, sigma=(0.4, 1.4) \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+В качестве функции потерь выбрана взвешенная кросс-энтропия, в качестве оптимизатора выбран AdamW (см. параметры в таблице \ref{tab:optimizer}).
+
+\begin{table}[htbp]
+    \centering
+    \caption{Параметры оптимизатора AdamW}
+    \label{tab:optimizer}
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabularx}{0.5\textwidth}{>{\ttfamily\footnotesize\raggedright\arraybackslash}X}
+        \toprule
+        \textnormal{\textbf{Оптимизатор и параметры}} \\
+        \midrule
+        \textnormal{\textbf{AdamW}} \\
+        \quad weight\_decay=1e-4 \\
+        \addlinespace
+        
+        \textnormal{\textbf{Группы параметров:}} \\
+        \addlinespace
+        
+        \textnormal{\textbf{clf\_head}} \\
+        \quad lr=0.007 \\
+        \addlinespace
+        
+        \textnormal{\textbf{model\_ax}} \\
+        \quad lr=1e-6, requires\_grad=True \\
+        \addlinespace
+        
+        \textnormal{\textbf{model\_sag}} \\
+        \quad lr=1e-6, requires\_grad=True \\
+        \addlinespace
+        
+        \textnormal{\textbf{model\_front}} \\
+        \quad lr=1e-6, requires\_grad=True \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
 
 \section{Эксперименты и результаты}
 Описание экспериментов и таблиц.
