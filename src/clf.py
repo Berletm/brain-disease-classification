@@ -365,7 +365,7 @@ def train_multi(n_epoch:  int,
         val_loss, metrics, cm = validate(model, criterion, val_loader)
 
         val_acc, f1, recall, precision = metrics
-        scheduler.step(f1)
+        scheduler.step(val_loss)
 
         if f1 > best_metric:
             counter = 0
