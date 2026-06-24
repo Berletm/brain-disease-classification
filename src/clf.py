@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import confusion_matrix, f1_score, recall_score, precision_score
 from torch.utils.data import DataLoader, random_split, Subset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -185,114 +185,6 @@ class MultiCLF(nn.Module):
 
         return torch.argmax(p, dim=1).cpu().numpy()
 
-
-def train(n_epoch:    int,
-          model:      nn.Module,
-          X:          np.ndarray,
-          y:          np.ndarray,
-          X_val:      np.ndarray,
-          y_val:      np.ndarray,
-          batch_size: int,
-          shuffle:    bool) -> Tuple[nn.Module, np.ndarray]:
-    X_tensor = torch.from_numpy(X).float().to(device)
-    X_val_tensor = torch.from_numpy(X_val).float().to(device)
-    y_tensor = torch.from_numpy(y).long().to(device)
-    y_val_tensor = torch.from_numpy(y_val).long().to(device)
-
-    model = model.to(device)
-    optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
-
-    patience = 20
-    counter  = 0
-    best_val_acc = 0.0
-
-    acc_hist = []
-
-    for epoch in range(n_epoch):
-        if counter > patience:
-            print(f"Early stopping, best Val accuracy: {best_val_acc}")
-            break
-        if shuffle:
-            permutation = torch.randperm(X_tensor.shape[0])
-            X_tensor = X_tensor[permutation]
-            y_tensor = y_tensor[permutation]
-
-        model.train()
-        mean_loss = 0.0
-        for i in range(0, len(X_tensor), batch_size):
-            optimizer.zero_grad()
-
-            X_tensor_batch = X_tensor[i: i + batch_size]
-            y_tensor_batch = y_tensor[i: i + batch_size]
-
-
-            output = model(X_tensor_batch)
-            loss   = criterion(output, y_tensor_batch)
-
-            loss.backward()
-            optimizer.step()
-            mean_loss += loss.item()
-
-        mean_loss = mean_loss / (len(X_tensor) / batch_size)
-        model.eval()
-        with torch.no_grad():
-            # val accuracy
-            output_val = model(X_val_tensor)
-            val_loss = criterion(output_val, y_val_tensor).item()
-            preds = torch.argmax(output_val, dim=1)
-            accuracy = (preds == y_val_tensor).float().mean().item()
-            scheduler.step(val_loss)
-            acc_hist.append(accuracy)
-
-            if accuracy > best_val_acc:
-                best_val_acc = accuracy
-                counter = 0
-            else:
-                counter += 1
-
-            # train accuracy
-            preds = torch.argmax(model(X_tensor), dim=1)
-            train_accuracy = (preds == y_tensor).float().mean().item()
-
-            print(f"Epoch {epoch + 1}/{n_epoch}, Train loss: {mean_loss:.4f} Val loss: {val_loss:.4f}, Val Accuracy: {accuracy:.4f}, "
-                  f"Train Accuracy: {train_accuracy:.4f}")
-
-    return model, np.array(acc_hist)
-
-def train_torch(n_epoch:  int,
-                model:    nn.Module,
-                train_loader: DataLoader,
-                val_loader  : DataLoader) -> Tuple[nn.Module, np.ndarray]:
-    model = model.to(device)
-    optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    criterion = CrossEntropyLoss(label_smoothing=0.1)
-    scheduler = ReduceLROnPlateau(optimizer)
-
-    for epoch in range(n_epoch):
-        model.train()
-        train_loss = 0.0
-        correct = 0
-        total = 0
-        for images, labels in train_loader:
-            images = images.to(device)
-            labels = labels.to(device)
-
-            loss, preds = train_step(images, labels, model, optimizer, criterion)
-
-            train_loss += loss
-            correct += (preds == labels).sum().item()
-            total += len(labels)
-        train_loss /= total
-        train_acc   = correct / total
-
-        val_loss, val_acc = validate(model, criterion, val_loader)
-        scheduler.step(val_loss)
-        print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f}")
-
-    return model
-
 def train_multi(n_epoch:  int,
                 model:    MultiCLF,
                 lr: float,
@@ -315,22 +207,23 @@ def train_multi(n_epoch:  int,
     best_loss = float("inf")
     best_acc = 0.0
     best_metric = 0.0
+    
+    if save:
+        log_counter = 1
+        f_name = f"../models/z{log_counter}"
+        if not os.path.exists(f_name):
+            os.mkdir(f_name)
+            log_file = open(os.path.join(f_name, "training.log"), "w+")
+        else:
+            while True:
+                f_name = f"../models/z{log_counter}"
+                if not os.path.exists(f_name):
+                    os.mkdir(f"../models/z{log_counter}")
+                    log_file = open(os.path.join(f_name, "training.log"), "w+")
+                    break
+                else: log_counter += 1; continue
 
-    log_counter = 1
-    f_name = f"../models/z{log_counter}"
-    if not os.path.exists(f_name):
-        os.mkdir(f_name)
-        log_file = open(os.path.join(f_name, "training.log"), "w+")
-    else:
-        while True:
-            f_name = f"../models/z{log_counter}"
-            if not os.path.exists(f_name):
-                os.mkdir(f"../models/z{log_counter}")
-                log_file = open(os.path.join(f_name, "training.log"), "w+")
-                break
-            else: log_counter += 1; continue
-
-    sys.stdout = Tee(log_file, sys.stdout)
+        sys.stdout = Tee(log_file, sys.stdout)
 
     for epoch in range(n_epoch):
         if counter > patience:
@@ -376,10 +269,11 @@ def train_multi(n_epoch:  int,
                 torch.save(model, os.path.join(SAVED_MODELS_PATH, f"z{log_counter}", "best_multi.pth"))
         else: counter += 1
 
-        print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f} | f1 weighted: {f1:.4f} | recall: {recall:.4f} | precision: {precision:.4f}")
-    log_file.close()
-    sys.stdout = sys.__stdout__
-    torch.save(model, os.path.join(SAVED_MODELS_PATH, f"z{log_counter}", f"multi.pth"))
+        print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f} | f1: {f1:.4f} | recall: {recall:.4f} | precision: {precision:.4f}")
+    if save:
+        torch.save(model, os.path.join(SAVED_MODELS_PATH, f"z{log_counter}", f"multi.pth"))
+        log_file.close()
+        sys.stdout = sys.__stdout__
     return model
 
 def train_step(x, y, model: nn.Module, optimizer, criterion: nn.Module) -> Tuple[float, torch.Tensor]:
@@ -435,11 +329,11 @@ def cross_validate_pytorch(
     model_params: dict,
     train_func: Callable, 
     n_splits: int = 5,
-    batch_size: int = 16,
+    batch_size: int = 8,
 ):
     labels = np.array(dataset.labels)
     indices = np.arange(len(dataset))
-    weights = 1 / np.array(dataset.counts)
+    weights = torch.tensor(1 / np.array(dataset.counts), dtype=torch.float32, device=device)
 
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
@@ -503,167 +397,101 @@ def cross_validate_pytorch(
 
     return results
 
-def objective(trial: optuna.Trial) -> float:
-    base_model = trial.suggest_categorical(name="base_model", choices=["resnet18", "resnet34", "resnet50", "convnext_tiny", "convnext_small", "convnext_base"])
+
+def objective(trial: optuna.Trial, train_ds: Subset) -> float:
+    base_model = trial.suggest_categorical(name="base_model", choices=["resnet18", "resnet34", "convnext_tiny", "convnext_small"])
     hidden_dim = trial.suggest_categorical(name="hidden_dim", choices=[64, 128, 256, 512, 1024])
-    attention_heads = trial.suggest_categorical(name="heads", choices=[2, 4, 8, 16])
-    lr = trial.suggest_float("learning_rate", low=1e-5, high=1e-2)
-
-    x_base_transforms = tv.Compose(
-    [
-        tv.ToTensor(),
-        tv.Resize((224, 224)),
-        tv.Normalize(mean=[0.485, 0.456, 0.406],
-                     std=[0.229, 0.224, 0.225]),
-    ])
-
-    ds = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
-
-    weights = 1 / np.array(ds.counts)
-
-    train_ds, val_ds = random_split(ds, [0.8, 0.2])
-
+    attention_heads = trial.suggest_categorical(name="heads", choices=[4, 8, 16, 32])
+    lr = trial.suggest_float("learning_rate", low=1e-5, high=5e-2, log=True)
+    
     train_transforms = tv.Compose([
-        tv.RandomAffine(
-            degrees=(-7, 7),         
-            translate=(0.08, 0.08),  
-            scale=(0.92, 1.10),       
-            shear=(-7, 7),           
-            interpolation=tv.InterpolationMode.BICUBIC,
-            fill=0
-        ),
-
-        tv.ElasticTransform(
-            alpha=120.,              
-            sigma=8.,                 
-            interpolation=tv.InterpolationMode.BICUBIC,
-            fill=0
-        ),
-
-        tv.RandomHorizontalFlip(p=0.5),
-        tv.RandomVerticalFlip(p=0.15),   
-
-        tv.RandomApply([
-            tv.ColorJitter(
-                brightness=(0.7, 1.4),
-                contrast=(0.75, 1.35),
-                saturation=0.,      
-                hue=0.
-            )
-        ], p=0.45),
-
-        tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
-        tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
-
-        tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
-        tv.ToTensor(),
-
-        tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    train_ds.x_transforms = train_transforms
-
-    g = torch.Generator()
-    g.manual_seed(0)
-
-    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    test_loader  = DataLoader(val_ds,  batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-
-    model = MultiCLF(base_model=base_model, hidden_dim=hidden_dim, num_classes=4, attention_heads=attention_heads)
-
-    model = train_multi(n_epoch=75, model=model, lr=lr, train_loader=train_loader, val_loader=test_loader, weights=weights)
-
-    weights = torch.tensor(weights, dtype=torch.float32, device=device)
-    criterion = torch.nn.CrossEntropyLoss(weight=weights)
-    loss, metrics, conf = validate(model, criterion, test_loader)
+            tv.RandomAffine(
+                degrees=(-7, 7),         
+                translate=(0.08, 0.08),  
+                scale=(0.92, 1.10),       
+                shear=(-7, 7),           
+                interpolation=tv.InterpolationMode.BICUBIC,
+                fill=0
+            ),
     
-    acc, f1, recall, precision = metrics
-
-    trial.set_user_attr("base_model", base_model)
-    trial.set_user_attr("hidden_dim", hidden_dim)
-    trial.set_user_attr("heads", attention_heads)
-    trial.set_user_attr("lr", lr)
-    print("\n\n")
-
-    return f1
-
-
-def main() -> None:
-    x_base_transforms = tv.Compose(
-    [
-        tv.ToTensor(),
-        tv.Resize((224, 224)),
-        tv.Normalize(mean=[0.485, 0.456, 0.406],
-                     std=[0.229, 0.224, 0.225]),
-    ])
-
-    ds = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
-
-    weights = torch.tensor(1 / np.array(ds.counts), dtype=torch.float32, device=device)
-    print(ds.counts)
-
-    train_ds, val_ds, test_ds = random_split(ds, [0.7, 0.2, 0.1], generator=g)
-
-    train_transforms = tv.Compose([
-        tv.RandomAffine(
-            degrees=(-7, 7),         
-            translate=(0.08, 0.08),  
-            scale=(0.92, 1.10),       
-            shear=(-7, 7),           
-            interpolation=tv.InterpolationMode.BICUBIC,
-            fill=0
-        ),
-
-        tv.ElasticTransform(
-            alpha=120.,              
-            sigma=8.,                 
-            interpolation=tv.InterpolationMode.BICUBIC,
-            fill=0
-        ),
-
-        tv.RandomHorizontalFlip(p=0.5),
-        tv.RandomVerticalFlip(p=0.15),   
-
-        tv.RandomApply([
-            tv.ColorJitter(
-                brightness=(0.7, 1.4),
-                contrast=(0.75, 1.35),
-                saturation=0.,      
-                hue=0.
-            )
-        ], p=0.45),
-
-        tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
-        tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
-
-        tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
-        tv.ToTensor(),
-        tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    train_ds.x_transforms = train_transforms
+            tv.ElasticTransform(
+                alpha=120.,              
+                sigma=8.,                 
+                interpolation=tv.InterpolationMode.BICUBIC,
+                fill=0
+            ),
     
-    train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    val_loader   = DataLoader(val_ds,  batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    test_loader  = DataLoader(test_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    ds_loader = DataLoader(ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+            tv.RandomHorizontalFlip(p=0.5),
+            tv.RandomVerticalFlip(p=0.15),   
+    
+            tv.RandomApply([
+                tv.ColorJitter(
+                    brightness=(0.7, 1.4),
+                    contrast=(0.75, 1.35),
+                    saturation=0.,      
+                    hue=0.
+                )
+            ], p=0.45),
+    
+            tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
+            tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
+    
+            tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
+            tv.ToTensor(),
+            tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    
+    full_labels = np.array(train_ds.dataset.labels)
+    train_indices = train_ds.indices
+    labels_subset = full_labels[train_indices]
+    
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    fold_f1_scores = []
+    
+    for inner_train_idx, inner_val_idx in skf.split(train_indices, labels_subset):
+        actual_train_idx = train_indices[inner_train_idx]
+        actual_val_idx = train_indices[inner_val_idx]
+        
+        inner_train_ds = Subset(train_ds.dataset, actual_train_idx)
+        inner_val_ds = Subset(train_ds.dataset, actual_val_idx)
+        
+        inner_train_ds.x_transforms = train_transforms
+        
+        train_loader = DataLoader(inner_train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True)
+        val_loader = DataLoader(inner_val_ds, batch_size=8, shuffle=False, num_workers=1, pin_memory=True)
+        
+        model = MultiCLF(
+            base_model=base_model, 
+            num_classes=6, 
+            hidden_dim=hidden_dim, 
+            attention_heads=attention_heads
+        )
+        
+        _, counts = np.unique(labels_subset, return_counts=True)
+        weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
+        
+        model = train_multi(
+            n_epoch=50, 
+            model=model, 
+            lr=lr, 
+            train_loader=train_loader, 
+            val_loader=val_loader, 
+            weights=weights,
+            save=False,
+            patience=4
+        )
+        
+        criterion = CrossEntropyLoss(weight=weights)
+        val_loss, metrics, _ = validate(model, criterion, val_loader)
+        _, f1, _, _ = metrics
+        fold_f1_scores.append(f1)
+        
+        del model, train_loader, val_loader, inner_train_ds, inner_val_ds
+        torch.cuda.empty_cache()
 
-    model = MultiCLF(base_model="convnext_base", num_classes=5, hidden_dim=64, attention_heads=16)
+    return np.mean(fold_f1_scores)
 
-    model = train_multi(n_epoch=200, model=model, train_loader=train_loader, val_loader=val_loader, weights=weights, lr=0.007133483490519629, patience=5)
-    
-    criterion = CrossEntropyLoss(weight=weights)
-    loss, (acc, f1, recall, precision), cm = validate(model, criterion, test_loader)
-    print(f"""
-          loss: {loss:.4f},
-          acc : {acc:.4f},
-          F1  : {f1:.4f},
-          recall: {recall:.4f},
-          precision: {precision:.4f},
-          """)
-    print(cm)
-    
-    
+def save_embeddings(model: MultiCLF, train_loader: DataLoader, val_loader: DataLoader, test_loader: DataLoader) -> None:
     model.clf_head = nn.Identity()
     model.eval()
     for loader, name in zip([train_loader, val_loader, test_loader], ["train", "val", "test"]):
@@ -683,6 +511,117 @@ def main() -> None:
         embeddings = np.array(embeddings)
         np.savetxt(f"../embeddings/{name}_embed.txt", embeddings)
         np.savetxt(f"../embeddings/{name}_label.txt", labels, fmt="%d")
+
+
+def main() -> None:
+    x_base_transforms = tv.Compose(
+    [
+        tv.ToTensor(),
+        tv.Resize((224, 224)),
+        tv.Normalize(mean=[0.485, 0.456, 0.406],
+                     std=[0.229, 0.224, 0.225]),
+    ])
+
+    ds = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
+
+    weights = torch.tensor(1 / np.array(ds.counts), dtype=torch.float32, device=device)
+    print(ds.counts)
+    
+    indices = np.arange(len(ds))
+    labels = np.array(ds.labels)
+
+    train_idx, test_idx, _, _ = train_test_split(
+        indices, labels, test_size=0.2, stratify=labels, random_state=42
+    )
+
+    train_ds = Subset(ds, train_idx)
+    test_ds = Subset(ds, test_idx)
+
+    train_transforms = tv.Compose([
+        tv.RandomAffine(
+            degrees=(-7, 7),         
+            translate=(0.08, 0.08),  
+            scale=(0.92, 1.10),       
+            shear=(-7, 7),           
+            interpolation=tv.InterpolationMode.BICUBIC,
+            fill=0
+        ),
+
+        tv.ElasticTransform(
+            alpha=120.,              
+            sigma=8.,                 
+            interpolation=tv.InterpolationMode.BICUBIC,
+            fill=0
+        ),
+
+        tv.RandomHorizontalFlip(p=0.5),
+        tv.RandomVerticalFlip(p=0.15),   
+
+        tv.RandomApply([
+            tv.ColorJitter(
+                brightness=(0.7, 1.4),
+                contrast=(0.75, 1.35),
+                saturation=0.,      
+                hue=0.
+            )
+        ], p=0.45),
+
+        tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
+        tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
+
+        tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
+        tv.ToTensor(),
+        tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=314))
+    study.optimize(lambda trial: objective(trial, train_ds), n_trials=100, timeout=6400)
+
+    df = study.trials_dataframe()
+    df.to_csv("optuna_results4.csv", index=False)
+
+    
+    best_params = study.best_params
+    print(f"Best F1: {study.best_value}")
+    print(f"Best params: {best_params}")
+    
+    best_params = {"base_model":"convnext_small", "attention_heads": 16, "hidden_dim": 512, "lr": 0.0026387660703893054}
+    
+    model = MultiCLF(
+        base_model=best_params["base_model"],
+        num_classes=6,
+        hidden_dim=best_params["hidden_dim"],
+        attention_heads=best_params["heads"]
+    )
+    
+    train_ds.x_transforms = train_transforms
+    
+    train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    test_loader  = DataLoader(test_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    
+    _, counts = np.unique(np.array(ds.labels)[train_idx], return_counts=True)
+    final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
+    
+    model = train_multi(
+        n_epoch=200, 
+        model=model, 
+        lr=best_params["learning_rate"], 
+        train_loader=train_loader, 
+        val_loader=test_loader,
+        weights=final_weights,
+        save=True,
+        patience=10
+    )    
+    criterion = CrossEntropyLoss(weight=final_weights)
+    loss, (acc, f1, recall, precision), cm = validate(model, criterion, test_loader)
+    print(f"""
+          loss: {loss:.4f},
+          acc : {acc:.4f},
+          F1  : {f1:.4f},
+          recall: {recall:.4f},
+          precision: {precision:.4f},
+          """)
+    print(cm)
     
 if __name__ == "__main__":
     main()

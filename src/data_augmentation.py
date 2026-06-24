@@ -22,7 +22,7 @@ class AxisHolder(Dataset):
 
 
         for img in os.listdir(self.dir + "/axial"):
-            if "autism" in img: continue
+            # if "autism" in img: continue
             ax_dir = os.path.join(self.dir + "/axial", img)
             front_dir = os.path.join(self.dir + "/frontal", img)
             sag_dir = os.path.join(self.dir + "/sagital", img)
@@ -34,8 +34,9 @@ class AxisHolder(Dataset):
             elif "alzheimer" in img: self.labels.append(2)
             elif "adhd"      in img: self.labels.append(3)
             elif "sclerosis" in img: self.labels.append(4)
+            elif "autism" in img: self.labels.append(5)
 
-        self.counts = [self.labels.count(i) for i in range(5)]
+        self.counts = [self.labels.count(i) for i in range(6)]
 
     def __len__(self) -> int:
         return len(self.images)
