@@ -7,23 +7,17 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
-def main() -> None:
+def visualize_embeddings():
     train_embeds = np.loadtxt("../embeddings/train_embed.txt")
     train_labels = np.loadtxt("../embeddings/train_label.txt", dtype=int)
     
     scaler = StandardScaler()
     train_scaled = scaler.fit_transform(train_embeds)
-    
-    val_embeds = np.loadtxt("../embeddings/val_embed.txt")
-    val_labels = np.loadtxt("../embeddings/val_label.txt", dtype=int)
-    
+
     test_embeds = np.loadtxt("../embeddings/test_embed.txt")
     test_labels = np.loadtxt("../embeddings/test_label.txt", dtype=int)
-
-    other_embeds = np.concatenate([val_embeds, test_embeds], axis=0)
-    other_labels = np.concatenate([val_labels, test_labels], axis=0)
     
-    other_scaled = scaler.transform(other_embeds)
+    other_scaled = scaler.transform(test_embeds)
     
     
     pca = KernelPCA(n_components=2, kernel="rbf", random_state=42)
@@ -65,7 +59,7 @@ def main() -> None:
         })
         df_other = pd.DataFrame({
             'x': other_proj[:, 0], 'y': other_proj[:, 1],
-            'label': other_labels, 'dataset': 'Val/Test'
+            'label': test_labels, 'dataset': 'Test'
         })
         df = pd.concat([df_train, df_other], ignore_index=True)
         
@@ -88,6 +82,9 @@ def main() -> None:
 
     plt.tight_layout()
     plt.show()
+
+def main() -> None:
+    visualize_embeddings()
 
 if __name__ == "__main__":
     main()
