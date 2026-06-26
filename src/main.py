@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
-def visualize_embeddings():
+sns.set_theme(style="darkgrid")
+
+def visualize_embeddings(save: bool=False) -> None:
     train_embeds = np.loadtxt("../embeddings/train_embed.txt")
     train_labels = np.loadtxt("../embeddings/train_label.txt", dtype=int)
     
@@ -30,7 +32,7 @@ def visualize_embeddings():
     pca_train = pca.transform(train_scaled)
     pca_other = pca.transform(other_scaled)
     
-    umap = UMAP(n_components=2, random_state=42)
+    umap = UMAP(n_components=2, n_neighbors=50, random_state=42)
     umap.fit(train_scaled)
     umap_train = umap.transform(train_scaled)
     umap_other = umap.transform(other_scaled)
@@ -81,10 +83,13 @@ def visualize_embeddings():
             sns.move_legend(ax[i], "center left", bbox_to_anchor=(1.02, 0.5), title='Класс / Выборка')
 
     plt.tight_layout()
-    plt.show()
+    if not save:
+        plt.show()
+    else:
+        plt.savefig("../report/utils/embeddings.png", dpi=700)
 
 def main() -> None:
-    visualize_embeddings()
+    visualize_embeddings(save=True)
 
 if __name__ == "__main__":
     main()

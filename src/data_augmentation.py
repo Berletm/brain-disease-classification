@@ -22,7 +22,6 @@ class AxisHolder(Dataset):
 
 
         for img in os.listdir(self.dir + "/axial"):
-            # if "autism" in img: continue
             ax_dir = os.path.join(self.dir + "/axial", img)
             front_dir = os.path.join(self.dir + "/frontal", img)
             sag_dir = os.path.join(self.dir + "/sagital", img)
@@ -55,3 +54,38 @@ class AxisHolder(Dataset):
         label = torch.tensor(label, dtype=torch.long)
 
         return (ax_img, front_img, sag_img), label
+
+class SliceHolder(Dataset):
+    def __init__(self, dataset_dir: str, x_transforms: tv.Compose):
+        self.images: list[str] = []
+        self.labels: list[int] = []
+        self.dir: str = dataset_dir
+        self.x_transforms: tv.Compose = x_transforms
+
+
+        for img in os.listdir(self.dir):
+            img_pth = os.path.join(self.dir, img)
+            self.images.append(img_pth)
+
+            if "control"     in img: self.labels.append(0)
+            elif "parkinson" in img: self.labels.append(1)
+            elif "alzheimer" in img: self.labels.append(2)
+            elif "adhd"      in img: self.labels.append(3)
+            elif "sclerosis" in img: self.labels.append(4)
+            elif "autism" in img: self.labels.append(5)
+
+        self.counts = [self.labels.count(i) for i in range(6)]
+
+    def __len__(self) -> int:
+        return len(self.images)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        img_path = self.images[idx]
+
+        img   = Image.open(img_path).convert("RGB")
+        label = self.labels[idx]
+
+        img   = self.x_transforms(img)
+        label = torch.tensor(label, dtype=torch.long)
+
+        return img, label

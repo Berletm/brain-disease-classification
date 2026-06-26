@@ -227,7 +227,7 @@
 
 Архитектура предлагаемой модели построена на следующих принципах. На вход нейронной сети подаются три изображения, соответствующие 
 различным анатомическим плоскостям одного и того же магнитно-резонансного томографического (МРТ) исследования. 
-Извлечение признаков осуществляется с помощью трех независимых потоков (branches), реализованных на базе архитектуры ConvNeXt-Base. 
+Извлечение признаков осуществляется с помощью трех независимых потоков (branches), реализованных на базе архитектуры ConvNeXt-Tiny. 
 Каждый поток обрабатывает данные соответствующей плоскости, формируя на выходе плотный вектор признаков (dense feature vector), характеризующий данную проекцию.
 Для слияния информации между различными плоскостями применяется механизм множественного внимания (Multi-Head Attention). 
 В рамках данного модуля в качестве запроса (Query, Q) выступает вектор признаков конкретной плоскости, тогда как в роли ключей (Key, K) 
@@ -348,42 +348,37 @@
 
 \subsection{Основные результаты классификации}
 
-hold-out
-loss: 0.2408,
-acc : 0.9107,
-F1  : 0.8954,
-recall: 0.9056,
-precision: 0.9021,
-          
-[[ 6  0  0  0  0  4]
- [ 0  8  0  0  0  0]
- [ 0  0  9  0  0  0]
- [ 0  0  0 19  0  0]
- [ 0  0  0  0  4  0]
- [ 1  0  0  0  0  5]]
-
-
-5-fold stratified cross-validation
-
-f1:        0.9572 +- 0.0297
-recall:    0.9622 +- 0.0257
-precision: 0.9598 +- 0.0256
-accuracy:  0.9641 +- 0.0252
-
 \begin{table}[htbp]
+    \centering
     \begin{tabular}{l||c}
         \toprule
         \textbf{Метрика} & \textbf{Значение} \\
         \midrule
-        Weighted Cross-Entropy & 0.2368 \\
-        Accuracy & 0.9286 \\
-        Macro F1 & 0.9153 \\
-        Macro Recall & 0.9222 \\
-        Macro Precision & 0.9167 \\
+        Weighted Cross-Entropy & 0.2757 \\
+        Accuracy & 0.9464 \\
+        Macro F1 & 0.9352 \\
+        Macro Recall & 0.9389 \\
+        Macro Precision & 0.9339 \\
         \bottomrule
     \end{tabular}
-    \caption{Результаты классификации на тестовой выборке}
-    \label{tab:test_results}
+    \caption{Результаты классификации на тестовой выборке (hold-out validation)}
+    \label{tab:hold-out-results}
+\end{table}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{l||c}
+        \toprule
+        \textbf{Метрика} & \textbf{Значение} \\
+        \midrule
+        Accuracy & $0.9641 \pm 0.0252$ \\
+        Macro F1 & $0.9572 \pm 0.0297$ \\
+        Macro Recall & $0.9622 \pm 0.0257$ \\
+        Macro Precision & $0.9598 \pm 0.0256$ \\
+        \bottomrule
+    \end{tabular}
+    \caption{Результаты стратифицированной кросс-валидации на 5 подвыборках (5-fold stratified cross-validation)}
+    \label{tab:strat-cross-val-results}
 \end{table}
 
 Анализ матрицы ошибок обученной модели демонстрирует, что алгоритм допускает ошибки классификации исключительно при сопоставлении пациентов с РАС 
@@ -445,6 +440,12 @@ accuracy:  0.9641 +- 0.0252
 
 \subsection{Анализ латентного простраства и интерпретируемость модели}
 
+\begin{figure*}[htbp]
+    \centering
+    \includegraphics[width=1.0\textwidth]{utils/embeddings.png}
+    \caption{Визуализация пространства внимания}
+    \label{fig:latent-space-visualization}
+\end{figure*}
 
 \section{Заключение}
 Выводы по работе.
