@@ -88,6 +88,9 @@ def visualize_embeddings(save: bool=False) -> None:
     else:
         plt.savefig("../report/utils/embeddings.png", dpi=700)
 
+def visualize_shap() -> None:
+    pass
+
 def main() -> None:
     visualize_embeddings(save=True)
 

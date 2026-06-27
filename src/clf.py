@@ -19,6 +19,10 @@ from logger import Tee
 import optuna
 import gc
 import copy
+import shap
+
+import matplotlib
+matplotlib.use('Agg')
 
 optuna.logging.set_verbosity(optuna.logging.INFO)
 
@@ -161,12 +165,11 @@ class MultiBranchAttention(Baseline):
         super().__init__(base_model, num_classes, hidden_dim)
         self.attention_heads = attention_heads
         self.attention_dim   = attention_dim
+        self.clf_head[0] = nn.Linear(3 * self.feature_dim, hidden_dim, device=device)
                 
         self.multi_head_attention = MultiHeadAttention(self.feature_dim, self.attention_dim, self.attention_heads)
 
-    def forward(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> torch.Tensor:
-        ax, front, sag = x
-
+    def forward(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> torch.Tensor:
         ax_logits    = self.model_ax(ax)
         front_logits = self.model_front(front)
         sag_logits   = self.model_sag(sag)
@@ -177,15 +180,11 @@ class MultiBranchAttention(Baseline):
         front_attention_logits = self.multi_head_attention(front_logits, logits)
         sag_attention_logits = self.multi_head_attention(sag_logits, logits)
         
-        attention_logits = torch.stack([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
+        attention_logits = torch.cat([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
         
-        fused_logits = torch.mean(attention_logits, dim=1)
-        
-        return self.clf_head(fused_logits)
+        return self.clf_head(attention_logits)
 
-    def predict(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> np.ndarray:
-        ax, front, sag = x
-
+    def predict(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> np.ndarray:
         ax_logits = self.model_ax(ax)
         front_logits = self.model_front(front)
         sag_logits = self.model_sag(sag)
@@ -213,9 +212,7 @@ class MultiBranchConcat(Baseline):
         super().__init__(base_model, num_classes, hidden_dim)
         self.clf_head[0] = nn.Linear(3 * self.feature_dim, hidden_dim, device=device)
         
-    def forward(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> torch.Tensor:
-        ax, front, sag = x
-
+    def forward(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> torch.Tensor:
         ax_logits    = self.model_ax(ax)
         front_logits = self.model_front(front)
         sag_logits   = self.model_sag(sag)
@@ -224,9 +221,7 @@ class MultiBranchConcat(Baseline):
         
         return self.clf_head(logits)
 
-    def predict(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> np.ndarray:
-        ax, front, sag = x
-
+    def predict(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> np.ndarray:
         ax_logits = self.model_ax(ax)
         front_logits = self.model_front(front)
         sag_logits = self.model_sag(sag)
@@ -243,9 +238,7 @@ class MultiBranchMean(Baseline):
     def __init__(self, base_model, num_classes, hidden_dim):
         super().__init__(base_model, num_classes, hidden_dim)
         
-    def forward(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> torch.Tensor:
-        ax, front, sag = x
-
+    def forward(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> torch.Tensor:
         ax_logits    = self.model_ax(ax)
         front_logits = self.model_front(front)
         sag_logits   = self.model_sag(sag)
@@ -254,9 +247,7 @@ class MultiBranchMean(Baseline):
         
         return self.clf_head(logits)
 
-    def predict(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> np.ndarray:
-        ax, front, sag = x
-
+    def predict(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> np.ndarray:
         ax_logits = self.model_ax(ax)
         front_logits = self.model_front(front)
         sag_logits = self.model_sag(sag)
@@ -296,7 +287,7 @@ def train_multi(n_epoch: int,
         {"params": [p for p in model.model_sag.parameters() if p.requires_grad],  "lr": 1e-6},
         {"params": [p for p in model.model_front.parameters() if p.requires_grad], "lr": 1e-6},
     ], lr=lr, weight_decay=1e-4)
-    criterion = CrossEntropyLoss(weight=weights, label_smoothing=0.1)
+    criterion = CrossEntropyLoss(weight=weights, label_smoothing=0.05)
     scheduler = ReduceLROnPlateau(optimizer, patience=2, factor=0.5)
 
     counter  = 0
@@ -378,7 +369,7 @@ def train_multi(n_epoch: int,
 def train_step(x, y, model: nn.Module, optimizer: torch.optim.Optimizer, criterion: nn.Module) -> Tuple[float, torch.Tensor]:
     optimizer.zero_grad()
 
-    output = model(x)
+    output = model(*x)
     loss = criterion(output, y)
     preds = torch.argmax(output, dim=1)
 
@@ -447,7 +438,7 @@ def train_single(n_epoch: int,
         print(f"Epoch: {epoch + 1}/{n_epoch} | Val loss: {val_loss:.4f} | Val acc: {val_acc:.4f} | Train loss: {train_loss:.4f} | Train acc: {train_acc:.4f} | f1: {f1:.4f} | recall: {recall:.4f} | precision: {precision:.4f}")
     return model
 
-def validate(model: Union[SingleBranch, MultiBranchAttention, MultiBranchConcat, MultiBranchMean], criterion: nn.Module, val_loader: DataLoader) -> Tuple[float, float]:
+def validate(model: Union[SingleBranch, MultiBranchAttention, MultiBranchConcat, MultiBranchMean], criterion: nn.Module, val_loader: DataLoader) -> Tuple[float, Tuple[float, float, float, float], np.ndarray]:
     model.eval()
     val_loss = 0.0
     correct = 0
@@ -462,12 +453,12 @@ def validate(model: Union[SingleBranch, MultiBranchAttention, MultiBranchConcat,
                 ax = ax.to(device)
                 front = front.to(device)
                 sag = sag.to(device)
-                img = (ax, front, sag)
+                output = model(ax, front, sag)
             else:
                 img = img.to(device)
+                output = model(img)
             label = label.to(device)
 
-            output = model(img)
             preds = torch.argmax(output, dim=1)
             y_pred.extend(preds.cpu().numpy().tolist())
             y_true.extend(label.cpu().numpy().tolist())
@@ -532,11 +523,12 @@ def cross_validate_pytorch(
             for inputs, targets in val_loader:
                 if isinstance(dataset, AxisHolder):
                     inputs = tuple(t.to(device) for t in inputs) 
+                    outputs = model(*inputs)
                 else:
                     inputs = inputs.to(device)
+                    outputs = model(inputs)
                 targets = targets.to(device)
 
-                outputs = model(inputs)
                 predictions = torch.argmax(outputs, dim=1)
 
                 val_preds.extend(predictions.cpu().numpy())
@@ -735,8 +727,6 @@ def main() -> None:
         tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
      
-    single_heuristic_ds = SliceHolder(HEURISTIC_DATASET_PATH, x_base_transforms)
-    single_mpca_ds = SliceHolder(os.path.join(REDUCED_DATASET_PATH, "axial"), x_base_transforms)
     multi_ds  = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
     
     indices = np.arange(len(multi_ds))
@@ -746,35 +736,11 @@ def main() -> None:
         indices, labels, test_size=0.2, stratify=labels, random_state=42
     )
 
-    train_single_heuristic_ds = Subset(single_heuristic_ds, train_idx)
-    test_single_heuristic_ds  = Subset(single_heuristic_ds, test_idx)    
-    train_single_heuristic_ds.x_transforms = train_transforms
-    
-    train_single_mpca_ds = Subset(single_mpca_ds, train_idx)
-    test_single_mpca_ds  = Subset(single_mpca_ds, test_idx)    
-    train_single_mpca_ds.x_transforms = train_transforms
-    
     train_multi_ds = Subset(multi_ds, train_idx)
     test_multi_ds  = Subset(multi_ds, test_idx)
     train_multi_ds.x_transforms = train_transforms
 
     best_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 64, 'attention_dim': 512, 'attention_heads': 16, "lr": 0.0006520366113221881}
-
-    single_model_mpca = SingleBranch(best_params["base_model"],
-                                     num_classes=6,
-                                     hidden_dim=best_params["hidden_dim"])
-
-    single_model_heuristic = SingleBranch(best_params["base_model"],
-                                          num_classes=6,
-                                          hidden_dim=best_params["hidden_dim"])
-    
-    concat_model = MultiBranchConcat(base_model=best_params["base_model"],
-                                     num_classes=6,
-                                     hidden_dim=best_params["hidden_dim"])
-
-    mean_model   = MultiBranchMean(base_model=best_params["base_model"],
-                                   num_classes=6,
-                                   hidden_dim=best_params["hidden_dim"])
 
     attention_model = MultiBranchAttention(
         base_model=best_params["base_model"],
@@ -783,83 +749,47 @@ def main() -> None:
         hidden_dim=best_params["hidden_dim"],
         attention_heads=best_params["attention_heads"]
     )
-
-    train_single_heuristic_loader = DataLoader(train_single_heuristic_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    test_single_heuristic_loader  = DataLoader(test_single_heuristic_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-
-    train_single_mpca_loader = DataLoader(train_single_mpca_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    test_single_mpca_loader  = DataLoader(test_single_mpca_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-
+    
     train_multi_loader = DataLoader(train_multi_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
     test_multi_loader  = DataLoader(test_multi_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
     
     _, counts = np.unique(np.array(multi_ds.labels)[train_idx], return_counts=True)
     final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
-    criterion = CrossEntropyLoss(weight=final_weights)
 
-    result = cross_validate_pytorch(multi_ds,
-                                    MultiBranchAttention,
-                                    {"base_model":best_params["base_model"], "num_classes":6,
-                                     "hidden_dim":best_params["hidden_dim"],
-                                     "attention_heads":best_params["attention_heads"], "attention_dim": best_params["attention_dim"] },
-                                    train_multi)
+    model: MultiBranchAttention = torch.load("../models/z1/best_multi.pth", weights_only=False)
+    model = model.to(device)
+    model.eval()
     
-    with open("../models/result_multi_attention.txt", "w+") as file:
-        file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
-        file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
-        file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
-        file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
+    batch = next(iter(test_multi_loader))
     
-    # heuristic = False
-    # n_epoch = 100
-    # for model in [single_model_heuristic, single_model_mpca, concat_model, mean_model, attention_model]:
-    #     print(model.__class__.__name__ + (" heuristic" if not heuristic else " mpca"))
-    #     if isinstance(model, (MultiBranchMean, MultiBranchAttention, MultiBranchConcat)):
-    #         model = train_multi(
-    #             n_epoch=n_epoch, 
-    #             model=model, 
-    #             lr=best_params["lr"], 
-    #             train_loader=train_multi_loader, 
-    #             val_loader=test_multi_loader,
-    #             weights=final_weights,
-    #             save=False,
-    #             patience=10
-    #         )
-                
-    #         loss, (acc, f1, recall, precision), cm = validate(model, criterion, test_multi_loader)
-    #     else:
-    #         if not heuristic:
-    #             model = train_single(n_epoch=n_epoch,
-    #                                 model=model,
-    #                                 lr=best_params["lr"],
-    #                                 train_loader=train_single_heuristic_loader,
-    #                                 val_loader=test_single_heuristic_loader,
-    #                                 weights=final_weights,
-    #                                 patience=10)
-    #             loss, (acc, f1, recall, precision), cm = validate(model, criterion, test_single_heuristic_loader)
-    #             heuristic = True
-    #         else:
-    #             model = train_single(n_epoch=n_epoch,
-    #                                 model=model,
-    #                                 lr=best_params["lr"],
-    #                                 train_loader=train_single_mpca_loader,
-    #                                 val_loader=test_single_mpca_loader,
-    #                                 weights=final_weights,
-    #                                 patience=10)
-    #             loss, (acc, f1, recall, precision), cm = validate(model, criterion, test_single_mpca_loader)
-                
-    #     print(f"""
-    #         loss: {loss:.4f},
-    #         acc : {acc:.4f},
-    #         F1  : {f1:.4f},
-    #         recall: {recall:.4f},
-    #         precision: {precision:.4f},
-    #         """)
-    #     print(cm)
-    #     print()
-    #     del model
-    #     torch.cuda.empty_cache()
-    #     gc.collect()
+    images, _ = batch
+    images_on_device = [img.to(device) for img in images]
+    
+    background = [img[:1] for img in images_on_device]
+    test_images = [img[1:2] for img in images_on_device]
+    e = shap.GradientExplainer(model, background)
+    torch.cuda.empty_cache()
+    shap_values = e.shap_values(test_images, nsamples=10)
+    
+    
+    test_numpy = [np.squeeze(img.cpu().numpy().transpose(0, 2, 3, 1)) for img in test_images]
+
+    for i, modality_name in enumerate(['Axial', 'Frontal', 'Sagittal']):   
+        shap_numpy = np.squeeze(shap_values[i].transpose(0, 2, 3, 1, 4))
+        print(shap_numpy.shape)
+        print(test_numpy[i].shape)
+
+        plt.clf()
+        
+        shap.image_plot(
+            shap_numpy, 
+            test_numpy[i], 
+            [f"{modality_name} SHAP values"],
+            show=False
+        )
+        
+        output_filename = f"shap_{modality_name.lower()}.png"
+        plt.savefig(output_filename, bbox_inches="tight", dpi=150)
     
 if __name__ == "__main__":
     main()
