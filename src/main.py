@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.manifold import TSNE
 from sklearn.decomposition import KernelPCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
 from umap import UMAP
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -88,11 +89,27 @@ def visualize_embeddings(save: bool=False) -> None:
     else:
         plt.savefig("../report/utils/embeddings.png", dpi=700)
 
-def visualize_shap() -> None:
-    pass
+def calc_silhouette() -> None:
+    train_embeds = np.loadtxt("../embeddings/train_embed.txt")
+    train_labels = np.loadtxt("../embeddings/train_label.txt", dtype=int)
+    
+    scaler = StandardScaler()
+    train_scaled = scaler.fit_transform(train_embeds)
+
+    test_embeds = np.loadtxt("../embeddings/test_embed.txt")
+    test_labels = np.loadtxt("../embeddings/test_label.txt", dtype=int)
+    
+    other_scaled = scaler.transform(test_embeds)
+    
+    train_score = silhouette_score(train_scaled, train_labels)
+    test_score  = silhouette_score(other_scaled, test_labels)
+
+    return train_score, test_score
 
 def main() -> None:
-    visualize_embeddings(save=True)
-
+    train, test = calc_silhouette()
+    print(train, test)
+    
+    
 if __name__ == "__main__":
     main()

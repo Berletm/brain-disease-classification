@@ -19,10 +19,7 @@ from logger import Tee
 import optuna
 import gc
 import copy
-import shap
-
-import matplotlib
-matplotlib.use('Agg')
+import seaborn as sns
 
 optuna.logging.set_verbosity(optuna.logging.INFO)
 
@@ -37,7 +34,7 @@ g = torch.Generator()
 g.manual_seed(0)
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, feature_dim:int=512, attention_dim:int=512, heads_num:int=4):
+    def __init__(self, feature_dim:int=512, attention_dim:int=512, heads_num:int=4, return_scores:bool=False):
         super().__init__()
 
         self.feature_dim = feature_dim
@@ -46,6 +43,7 @@ class MultiHeadAttention(nn.Module):
         self.head_dim  = attention_dim // self.heads_num
         self.scale = self.head_dim ** 0.5
         self.planes    = 3
+        self.return_scores = return_scores
 
         self.q_proj = nn.Linear(feature_dim, attention_dim)
         self.k_proj = nn.Linear(feature_dim, attention_dim)
@@ -75,6 +73,8 @@ class MultiHeadAttention(nn.Module):
         out = torch.einsum('bhk,bkhd->bhd', attn_probs, V) # (3 x (4 x 128)) * (3 x 4) = 4 x 128 ~ 4 vec 128 x 1
         out = out.reshape(batch_size, -1) # flatten
         
+        if self.return_scores:
+            return self.out_proj(out) + q_features, attn_probs
         return self.out_proj(out) + q_features
 
 class Baseline(nn.Module):
@@ -161,13 +161,14 @@ class Baseline(nn.Module):
         raise NotImplementedError
 
 class MultiBranchAttention(Baseline):
-    def __init__(self, base_model:str, hidden_dim:int, num_classes:int, attention_dim:int, attention_heads:int):
+    def __init__(self, base_model:str, hidden_dim:int, num_classes:int, attention_dim:int, attention_heads:int, return_attention_scores:bool=False):
         super().__init__(base_model, num_classes, hidden_dim)
         self.attention_heads = attention_heads
         self.attention_dim   = attention_dim
         self.clf_head[0] = nn.Linear(3 * self.feature_dim, hidden_dim, device=device)
+        self.return_attention_scores = return_attention_scores
                 
-        self.multi_head_attention = MultiHeadAttention(self.feature_dim, self.attention_dim, self.attention_heads)
+        self.multi_head_attention = MultiHeadAttention(self.feature_dim, self.attention_dim, self.attention_heads, return_attention_scores)
 
     def forward(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> torch.Tensor:
         ax_logits    = self.model_ax(ax)
@@ -175,12 +176,20 @@ class MultiBranchAttention(Baseline):
         sag_logits   = self.model_sag(sag)
 
         logits = torch.stack([ax_logits, front_logits, sag_logits], dim=1)
-
-        ax_attention_logits = self.multi_head_attention(ax_logits, logits)
-        front_attention_logits = self.multi_head_attention(front_logits, logits)
-        sag_attention_logits = self.multi_head_attention(sag_logits, logits)
+        
+        if not self.return_attention_scores:
+            ax_attention_logits = self.multi_head_attention(ax_logits, logits)
+            front_attention_logits = self.multi_head_attention(front_logits, logits)
+            sag_attention_logits = self.multi_head_attention(sag_logits, logits)
+        else:
+            ax_attention_logits, ax_scores = self.multi_head_attention(ax_logits, logits)
+            front_attention_logits, front_scores = self.multi_head_attention(front_logits, logits)
+            sag_attention_logits, sag_scores = self.multi_head_attention(sag_logits, logits)
         
         attention_logits = torch.cat([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
+        
+        if self.return_attention_scores:
+            return self.clf_head(attention_logits), (ax_scores, front_scores, sag_scores)
         
         return self.clf_head(attention_logits)
 
@@ -197,6 +206,14 @@ class MultiBranchAttention(Baseline):
 
         return torch.argmax(p, dim=1).cpu().numpy()
 
+    def return_scores(self) -> None:
+        self.return_attention_scores            = True
+        self.multi_head_attention.return_scores = True
+    
+    def hide_scores(self) -> None:
+        self.return_attention_scores            = False
+        self.multi_head_attention.return_scores = False
+    
 class SingleBranch(Baseline):
     def __init__(self, base_model, num_classes, hidden_dim) -> None:
         super().__init__(base_model, num_classes, hidden_dim)
@@ -681,6 +698,78 @@ def save_confusion_matrix(cm: np.ndarray, labels: list) -> None:
     plt.tight_layout()
     plt.savefig("../report/utils/conf_mat.png", dpi=700)
 
+def plot_attention_scores_full(attention_data: dict) -> None:
+    fig, axes = plt.subplots(6, 3, figsize=(16, 12))
+    fig.suptitle(f'Attention Weights by Heads', fontsize=16)
+    
+    titles = ['Query: Axial', 'Query: Frontal', 'Query: Sagittal']
+    
+    class_labels = {
+        "control": "Control",
+        "parkinson": "Parkinson",
+        "alzheimer": "Alzheimer",
+        "adhd": "ADHD",
+        "sclerosis": "Sclerosis",
+        "autism": "Autism"
+    }
+    
+    for row, (class_name, content) in enumerate(attention_data.items()):
+        data = [content["ax"], content["front"], content["sag"]]
+        class_display_name = class_labels.get(class_name, class_name.capitalize())
+        
+        for idx, (ax, title, d) in enumerate(zip(axes[row], titles, data)):
+            if d is not None:
+                sns.heatmap(d, annot=True, fmt=".2f", cmap='Blues', 
+                            xticklabels=['KV: Ax', 'KV: Front', 'KV: Sag'],
+                            yticklabels=[f"Head {i + 1}" for i in range(16)],
+                            vmin=0, vmax=1, ax=ax)
+                if idx == 0:
+                    ax.set_title(f'{class_display_name} - {title}', fontweight='bold')
+                else:
+                    ax.set_title(title)
+                ax.set_ylabel('Attention Head')
+                ax.set_xlabel('Key-Value Projections')
+            else:
+                ax.text(0.5, 0.5, 'No samples', ha='center', va='center')
+                if idx == 0:
+                    ax.set_title(f'{class_display_name} - {title}', fontweight='bold')
+                else:
+                    ax.set_title(title)
+            
+    plt.tight_layout()
+    plt.show()
+
+def plot_aggregated_matrices(attention_data: dict) -> None:
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig.suptitle('Агрегированные веса внимания (усредненные по головам)', fontsize=16)
+    
+    class_labels = {
+        "control": "Контрольная группа", "parkinson": "Паркинсон", "alzheimer": "Альцгеймер",
+        "adhd": "СДВГ", "sclerosis": "Склероз", "autism": "РАС"
+    }
+    
+    for idx, (class_name, content) in enumerate(attention_data.items()):
+        row, col = idx // 3, idx % 3
+        ax = axes[row, col]
+        
+        ax_agg = content["ax"].mean(axis=0)      # [3]
+        front_agg = content["front"].mean(axis=0) # [3]
+        sag_agg = content["sag"].mean(axis=0)     # [3]
+        
+        flow_matrix = np.vstack([ax_agg, front_agg, sag_agg])
+        
+        sns.heatmap(flow_matrix, annot=True, fmt=".2f", cmap='YlOrRd',
+                    xticklabels=['KV: Ax', 'KV: Front', 'KV: Sag'],
+                    yticklabels=['Q: Ax', 'Q: Front', 'Q: Sag'],
+                    vmin=0, vmax=1, ax=ax, cbar=False)
+        
+        ax.set_title(class_labels.get(class_name, class_name), fontweight='bold', fontsize=12)
+        ax.set_xlabel('KV проекция')
+        ax.set_ylabel('Query проекция')
+    
+    plt.tight_layout()
+    plt.savefig("../report/utils/attention_agg.png", dpi=700)
+    
 def main() -> None:
     x_base_transforms = tv.Compose(
     [
@@ -742,12 +831,12 @@ def main() -> None:
 
     best_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 64, 'attention_dim': 512, 'attention_heads': 16, "lr": 0.0006520366113221881}
 
-    attention_model = MultiBranchAttention(
+    attention_model: MultiBranchAttention = MultiBranchAttention(
         base_model=best_params["base_model"],
         num_classes=6,
         attention_dim=best_params["attention_dim"],
         hidden_dim=best_params["hidden_dim"],
-        attention_heads=best_params["attention_heads"]
+        attention_heads=best_params["attention_heads"],
     )
     
     train_multi_loader = DataLoader(train_multi_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
@@ -756,40 +845,51 @@ def main() -> None:
     _, counts = np.unique(np.array(multi_ds.labels)[train_idx], return_counts=True)
     final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
 
-    model: MultiBranchAttention = torch.load("../models/z1/best_multi.pth", weights_only=False)
+    # model: MultiBranchAttention = train_multi(100, attention_model, best_params["lr"], train_multi_loader, test_multi_loader, final_weights, True, 10)
+
+    model: MultiBranchAttention = torch.load("../models/z3/best_multi.pth", weights_only=False)
     model = model.to(device)
     model.eval()
+    model.return_scores()
     
-    batch = next(iter(test_multi_loader))
+    attention_scores = {"ax": [], "front": [], "sag": []}
     
-    images, _ = batch
-    images_on_device = [img.to(device) for img in images]
+    all_labels = []
     
-    background = [img[:1] for img in images_on_device]
-    test_images = [img[1:2] for img in images_on_device]
-    e = shap.GradientExplainer(model, background)
-    torch.cuda.empty_cache()
-    shap_values = e.shap_values(test_images, nsamples=10)
-    
-    
-    test_numpy = [np.squeeze(img.cpu().numpy().transpose(0, 2, 3, 1)) for img in test_images]
+    with torch.no_grad():
+        for img, label in test_multi_loader:
+            img   = [i.to(device) for i in img]
+            label = label.to(device)
 
-    for i, modality_name in enumerate(['Axial', 'Frontal', 'Sagittal']):   
-        shap_numpy = np.squeeze(shap_values[i].transpose(0, 2, 3, 1, 4))
-        print(shap_numpy.shape)
-        print(test_numpy[i].shape)
+            _, (ax_scores, front_scores, sag_scores) = model(*img)
+            
+            all_labels.append(label.cpu())
+            attention_scores["ax"].append(ax_scores.cpu())
+            attention_scores["front"].append(front_scores.cpu())
+            attention_scores["sag"].append(sag_scores.cpu())
+            
+    class_means = {"control": {}, "parkinson": {}, "alzheimer": {}, "adhd": {}, "sclerosis": {}, "autism": {}}
+    class_names = {0: "control", 1: "parkinson", 2: "alzheimer", 3: "adhd", 4: "sclerosis", 5: "autism"}
+    all_labels = torch.cat(all_labels)
+    ax_scores_all = torch.cat(attention_scores["ax"])
+    front_scores_all = torch.cat(attention_scores["front"])
+    sag_scores_all = torch.cat(attention_scores["sag"])
+    
+    for class_id, class_name in class_names.items():
+        mask = (all_labels == class_id)
+        ax_class_probs = ax_scores_all[mask]
+        front_class_probs = front_scores_all[mask]
+        sag_class_probs = sag_scores_all[mask]
+        
 
-        plt.clf()
+        class_means[class_name]["ax"]    = ax_class_probs.mean(dim=0).numpy()
+        class_means[class_name]["sag"]   = sag_class_probs.mean(dim=0).numpy()
+        class_means[class_name]["front"] = front_class_probs.mean(dim=0).numpy()
         
-        shap.image_plot(
-            shap_numpy, 
-            test_numpy[i], 
-            [f"{modality_name} SHAP values"],
-            show=False
-        )
-        
-        output_filename = f"shap_{modality_name.lower()}.png"
-        plt.savefig(output_filename, bbox_inches="tight", dpi=150)
+    
+    # plot_attention_scores_full(class_means)
+    plot_aggregated_matrices(class_means)
+            
     
 if __name__ == "__main__":
     main()
