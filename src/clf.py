@@ -20,6 +20,7 @@ import optuna
 import gc
 import copy
 import seaborn as sns
+from focal import FocalLoss
 
 optuna.logging.set_verbosity(optuna.logging.INFO)
 
@@ -176,6 +177,7 @@ class MultiBranchAttention(Baseline):
         sag_logits   = self.model_sag(sag)
 
         logits = torch.stack([ax_logits, front_logits, sag_logits], dim=1)
+        # logits = 1/3 * (ax_logits + front_logits + sag_logits)
         
         if not self.return_attention_scores:
             ax_attention_logits = self.multi_head_attention(ax_logits, logits)
@@ -187,6 +189,7 @@ class MultiBranchAttention(Baseline):
             sag_attention_logits, sag_scores = self.multi_head_attention(sag_logits, logits)
         
         attention_logits = torch.cat([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
+        # attention_logits = 1/3 * (ax_logits + front_logits + sag_logits)
         
         if self.return_attention_scores:
             return self.clf_head(attention_logits), (ax_scores, front_scores, sag_scores)
@@ -198,6 +201,7 @@ class MultiBranchAttention(Baseline):
         front_logits = self.model_front(front)
         sag_logits = self.model_sag(sag)
 
+        # logits = 1/3 * (ax_logits + front_logits + sag_logits)
         logits = torch.cat([ax_logits, front_logits, sag_logits], dim=1)
 
         logits = self.clf_head(logits)
@@ -280,9 +284,9 @@ class MultiBranchMean(Baseline):
 def train_multi(n_epoch: int,
                 model: Union[MultiHeadAttention, MultiBranchConcat, MultiBranchMean],
                 lr: float,
+                criterion,
                 train_loader: DataLoader,
                 val_loader: DataLoader,
-                weights: torch.Tensor, 
                 save: bool=True,
                 patience: int=5) -> Union[MultiHeadAttention, MultiBranchConcat, MultiBranchMean]:
     model = model.to(device)
@@ -303,8 +307,7 @@ def train_multi(n_epoch: int,
         {"params": [p for p in model.model_ax.parameters() if p.requires_grad],  "lr": 1e-6},
         {"params": [p for p in model.model_sag.parameters() if p.requires_grad],  "lr": 1e-6},
         {"params": [p for p in model.model_front.parameters() if p.requires_grad], "lr": 1e-6},
-    ], lr=lr, weight_decay=1e-4)
-    criterion = CrossEntropyLoss(weight=weights, label_smoothing=0.05)
+    ], lr=lr)
     scheduler = ReduceLROnPlateau(optimizer, patience=2, factor=0.5)
 
     counter  = 0
@@ -386,7 +389,7 @@ def train_multi(n_epoch: int,
 def train_step(x, y, model: nn.Module, optimizer: torch.optim.Optimizer, criterion: nn.Module) -> Tuple[float, torch.Tensor]:
     optimizer.zero_grad()
 
-    output = model(*x)
+    output = model(x)
     loss = criterion(output, y)
     preds = torch.argmax(output, dim=1)
 
@@ -400,14 +403,13 @@ def train_single(n_epoch: int,
                 lr: float,
                 train_loader: DataLoader,
                 val_loader: DataLoader,
-                weights: torch.Tensor,
+                criterion: Union[FocalLoss, CrossEntropyLoss],
                 patience: int=5) -> SingleBranch:
     model = model.to(device)
     optimizer = AdamW([
         {'params': model.clf_head.parameters(), 'lr': lr},
         {'params': [p for p in model.model_ax.parameters() if p.requires_grad], 'lr': 1e-6},
     ], weight_decay=1e-4)
-    criterion = CrossEntropyLoss(weight=weights, label_smoothing=0.1)
     scheduler = ReduceLROnPlateau(optimizer, patience=2)
 
     counter  = 0
@@ -498,6 +500,7 @@ def cross_validate_pytorch(
     dataset: Union[AxisHolder, SliceHolder], 
     model_class: Callable,
     model_params: dict,
+    other_params: dict,
     train_func: Callable, 
     n_splits: int = 5,
     batch_size: int = 8,
@@ -507,6 +510,8 @@ def cross_validate_pytorch(
     weights = torch.tensor(1 / np.array(dataset.counts), dtype=torch.float32, device=device)
 
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    
+    criterion = FocalLoss(other_params["gamma"], weights, other_params["smoothing"])
 
     results = \
     {
@@ -528,9 +533,9 @@ def cross_validate_pytorch(
         train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
 
-        model = model_class(**model_params).to(device) 
+        model = model_class(**model_params).to(device)
 
-        model = train_func(n_epoch=50, model=model, train_loader=train_loader, val_loader=val_loader, lr=0.0006520366113221881, weights=weights)
+        model = train_func(n_epoch=50, model=model, criterion=criterion, train_loader=train_loader, val_loader=val_loader, lr=other_params["lr"])
 
         model.eval()
         val_preds = []
@@ -577,7 +582,9 @@ def objective(trial: optuna.Trial, train_ds: Subset) -> float:
     hidden_dim = trial.suggest_categorical(name="hidden_dim", choices=[64, 128, 256, 512, 1024])
     attention_dim = trial.suggest_categorical(name="attention_dim", choices=[64, 128, 256, 512, 1024])
     attention_heads = trial.suggest_categorical(name="attention_heads", choices=[4, 8, 16, 32])
-    lr = trial.suggest_float("lr", low=1e-5, high=5e-2, log=True)
+    lr = trial.suggest_float("lr", low=1e-5, high=8e-3, log=True)
+    gamma = trial.suggest_int("gamma", low=0, high=5)
+    smoothing = trial.suggest_float("smoothing", low=1e-2, high=3e-1, log=True)
     
     train_transforms = tv.Compose([
             tv.RandomAffine(
@@ -630,6 +637,10 @@ def objective(trial: optuna.Trial, train_ds: Subset) -> float:
         inner_train_ds = Subset(train_ds.dataset, actual_train_idx)
         inner_val_ds = Subset(train_ds.dataset, actual_val_idx)
         
+        _, counts = np.unique(full_labels[actual_train_idx], return_counts=True)
+        weights   = torch.as_tensor(1.0 / counts, dtype=torch.float32, device=device)
+        criterion = FocalLoss(gamma, weights, smoothing)
+
         inner_train_ds.x_transforms = train_transforms
         
         train_loader = DataLoader(inner_train_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True)
@@ -643,21 +654,17 @@ def objective(trial: optuna.Trial, train_ds: Subset) -> float:
             attention_heads=attention_heads
         )
         
-        _, counts = np.unique(labels_subset, return_counts=True)
-        weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
-        
         model = train_multi(
             n_epoch=50, 
             model=model, 
             lr=lr, 
+            criterion=criterion,
             train_loader=train_loader, 
             val_loader=val_loader, 
-            weights=weights,
             save=False,
             patience=3
         )
         
-        criterion = CrossEntropyLoss(weight=weights)
         val_loss, metrics, _ = validate(model, criterion, val_loader)
         _, f1, _, _ = metrics
         fold_f1_scores.append(f1)
@@ -770,6 +777,23 @@ def plot_aggregated_matrices(attention_data: dict) -> None:
     plt.tight_layout()
     plt.savefig("../report/utils/attention_agg.png", dpi=700)
     
+def find_hyperparams(train_ds: Subset, max_time: int=3600) -> dict:
+    study = optuna.create_study(direction='maximize')
+    study.optimize(lambda x: objective(x, train_ds), n_trials=100, timeout=max_time)
+    df = study.trials_dataframe()
+    df.to_csv("optuna_results.csv", index=False)
+    
+    return study.best_params
+
+def write_cv_results(ds: AxisHolder, params: dict, other_params: dict, model: Union[SingleBranch, MultiBranchMean, MultiBranchConcat, MultiBranchAttention], train_func: Union[train_single, train_multi]) -> None:
+    result = cross_validate_pytorch(ds, model, params, other_params, train_func)
+
+    with open("../models/result.txt", "w+") as file:
+        file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
+        file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
+        file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
+        file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
+
 def main() -> None:
     x_base_transforms = tv.Compose(
     [
@@ -816,7 +840,7 @@ def main() -> None:
         tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
      
-    multi_ds  = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
+    multi_ds  = SliceHolder(HEURISTIC_DATASET_PATH, x_base_transforms)
     
     indices = np.arange(len(multi_ds))
     labels  = np.array(multi_ds.labels)
@@ -829,15 +853,10 @@ def main() -> None:
     test_multi_ds  = Subset(multi_ds, test_idx)
     train_multi_ds.x_transforms = train_transforms
 
-    best_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 64, 'attention_dim': 512, 'attention_heads': 16, "lr": 0.0006520366113221881}
-
-    attention_model: MultiBranchAttention = MultiBranchAttention(
-        base_model=best_params["base_model"],
-        num_classes=6,
-        attention_dim=best_params["attention_dim"],
-        hidden_dim=best_params["hidden_dim"],
-        attention_heads=best_params["attention_heads"],
-    )
+    best_multi_attention_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512, 'attention_dim': 128, 'attention_heads': 32}
+    best_params_other = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512}
+    other_params = {"gamma": 3, "smoothing": 0.188, "lr": 3e-4}
+    # best_params = {"attention_dim": 512, "attention_heads": 32, "base_model": "resnet34", "gamma": 3, "hidden_dim": 512, "lr": 0.0003153406138383622, "smoothing": 0.1882631069929521}
     
     train_multi_loader = DataLoader(train_multi_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
     test_multi_loader  = DataLoader(test_multi_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
@@ -845,51 +864,29 @@ def main() -> None:
     _, counts = np.unique(np.array(multi_ds.labels)[train_idx], return_counts=True)
     final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
 
-    # model: MultiBranchAttention = train_multi(100, attention_model, best_params["lr"], train_multi_loader, test_multi_loader, final_weights, True, 10)
+    # params = find_hyperparams(train_multi_ds, 7200)
+    
+    # criterion = FocalLoss(3, final_weights, 0.15)
+    # attention_model: MultiBranchAttention = MultiBranchAttention(
+    #     base_model=best_params["base_model"],
+    #     num_classes=6,
+    #     attention_dim=best_params["attention_dim"],
+    #     hidden_dim=best_params["hidden_dim"],
+    #     attention_heads=best_params["attention_heads"]
+    # )
 
-    model: MultiBranchAttention = torch.load("../models/z3/best_multi.pth", weights_only=False)
-    model = model.to(device)
-    model.eval()
-    model.return_scores()
+    write_cv_results(multi_ds, best_params_other, other_params, SingleBranch, train_single)
     
-    attention_scores = {"ax": [], "front": [], "sag": []}
     
-    all_labels = []
-    
-    with torch.no_grad():
-        for img, label in test_multi_loader:
-            img   = [i.to(device) for i in img]
-            label = label.to(device)
+    # model: MultiBranchAttention = train_multi(100, attention_model, 3e-4, criterion, train_multi_loader, test_multi_loader)
 
-            _, (ax_scores, front_scores, sag_scores) = model(*img)
-            
-            all_labels.append(label.cpu())
-            attention_scores["ax"].append(ax_scores.cpu())
-            attention_scores["front"].append(front_scores.cpu())
-            attention_scores["sag"].append(sag_scores.cpu())
-            
-    class_means = {"control": {}, "parkinson": {}, "alzheimer": {}, "adhd": {}, "sclerosis": {}, "autism": {}}
-    class_names = {0: "control", 1: "parkinson", 2: "alzheimer", 3: "adhd", 4: "sclerosis", 5: "autism"}
-    all_labels = torch.cat(all_labels)
-    ax_scores_all = torch.cat(attention_scores["ax"])
-    front_scores_all = torch.cat(attention_scores["front"])
-    sag_scores_all = torch.cat(attention_scores["sag"])
-    
-    for class_id, class_name in class_names.items():
-        mask = (all_labels == class_id)
-        ax_class_probs = ax_scores_all[mask]
-        front_class_probs = front_scores_all[mask]
-        sag_class_probs = sag_scores_all[mask]
-        
+    # val_loss, (val_acc, f1, recall, precision), cm = validate(model, criterion, test_multi_loader)
+    # print(f"{val_acc} {f1} {recall} {precision}")
+    # save_confusion_matrix(cm, ["Контрольная группа", "Паркинсон", "Альцгеймер", "СДВГ", "Рассеянный склероз", "РАС"])
+    # disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    # disp.plot()
+    # plt.show()
 
-        class_means[class_name]["ax"]    = ax_class_probs.mean(dim=0).numpy()
-        class_means[class_name]["sag"]   = sag_class_probs.mean(dim=0).numpy()
-        class_means[class_name]["front"] = front_class_probs.mean(dim=0).numpy()
-        
-    
-    # plot_attention_scores_full(class_means)
-    plot_aggregated_matrices(class_means)
-            
-    
+
 if __name__ == "__main__":
     main()

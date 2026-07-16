@@ -7,8 +7,10 @@ from skimage.transform import resize
 from utils import *
 
 class MPCA:
-    def __init__(self, max_iter: int = 15, ranks: tuple = (), projection_mode: str="axial", tol: float = 1e-6):
+    def __init__(self, kernel: str = "linear", degree:int = 2, max_iter: int = 15, ranks: tuple = (), projection_mode: str="axial", tol: float = 1e-6):
+        self.kernel = kernel
         self.max_iter = max_iter
+        self.degree = degree
         
         self.ranks = np.array(ranks)
         
@@ -32,10 +34,9 @@ class MPCA:
         full_shape.insert(0, mode_dim)
         return np.moveaxis(np.reshape(tensor, full_shape), 0, mode)
     
-    @staticmethod
-    def n_mode_prod(tensor: np.ndarray, matrix: np.ndarray, mode: int) -> np.ndarray:
-        res = np.dot(matrix, MPCA.unfold(tensor, mode))
-
+    def n_mode_prod(self, tensor: np.ndarray, matrix: np.ndarray, mode: int) -> np.ndarray:
+        res = matrix @ MPCA.unfold(tensor, mode)
+            
         new_shape = list(tensor.shape)
         new_shape[mode] = matrix.shape[0]
 
@@ -68,7 +69,39 @@ class MPCA:
 
         res = np.array(projected_all)
         return res
-
+    
+    def __inner_prod(self, lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+        dots = lhs @ rhs
+        
+        if self.kernel == "linear":
+            return dots
+        
+        elif self.kernel == "poly":
+            return (dots + 1) ** self.degree
+        
+        elif self.kernel == "sigmoid":
+            return np.tanh(dots)
+        
+        elif self.kernel == "rbf":
+            lhs_norm = np.sum(lhs ** 2, axis=1)
+            rhs_norm = np.sum(rhs ** 2, axis=0)
+            
+            dist_sq = lhs_norm[:, np.newaxis] + rhs_norm[np.newaxis, :] - 2 * (dots)
+        
+            dist_sq = np.maximum(dist_sq, 0.0)
+        
+            return np.exp(-dist_sq)
+        
+        elif self.kernel == "cosine":
+            lhs_norm = np.sqrt(np.sum(lhs ** 2, axis=1))
+            rhs_norm = np.sqrt(np.sum(rhs ** 2, axis=0))
+            norms = np.maximum(lhs_norm * rhs_norm, 1e-10) 
+            
+            return dots / norms
+        
+        else:
+            return dots
+        
     def fit(self, dataset: np.ndarray) -> None:
         n, i_dim, j_dim, k_dim = dataset.shape
         r1, r2, r3 = self.ranks
@@ -84,6 +117,11 @@ class MPCA:
         
         mats = [self.axial_mat, self.frontal_mat, self.sagital_mat]
 
+        original_variance = sum(
+           np.linalg.norm(dataset[i]) ** 2 
+           for i in range(n)
+        )
+
         # metric
         prev_total_variance = -1.0
         for it in range(1, self.max_iter + 1):
@@ -97,25 +135,26 @@ class MPCA:
                         temp_proj = self.n_mode_prod(temp_proj, mats[o].T, o)
 
                     unfolded = self.unfold(temp_proj, m)
-                    covariance_mat += unfolded @ unfolded.T
+                    covariance_mat += self.__inner_prod(unfolded, unfolded.T)
 
                 eig_vals, eig_vecs = np.linalg.eigh(covariance_mat)
                 sort_indices = np.argsort(eig_vals)[::-1]
                 target_rank = self.ranks[m]
                 mats[m] = eig_vecs[:, sort_indices[:target_rank]]
             
-            total_variance = 0.0
+            preserved_variance = 0.0
             for i in range(n):
                 proj = dataset[i]
                 for m in range(3):
                     proj = self.n_mode_prod(proj, mats[m].T, m)
-                total_variance += np.linalg.norm(proj) ** 2
-            print(f"Iter {it}| Total preserved variance: {total_variance:.6f}")
+                preserved_variance += np.linalg.norm(proj) ** 2                
+                
+            print(f"Iter {it}| Total preserved variance ratio: {preserved_variance / original_variance:.6f}")
             
-            if abs(total_variance - prev_total_variance) < self.tol:
+            if abs(preserved_variance - prev_total_variance) < self.tol:
                 print(f"Converged at iteration {it}")
                 break
-            prev_total_variance = total_variance
+            prev_total_variance = preserved_variance
 
         self.axial_mat, self.frontal_mat, self.sagital_mat = mats
         self.initialized = True
@@ -138,7 +177,7 @@ class MPCA:
                             sagital_mat=self.sagital_mat,
                             ranks=self.ranks, 
                             projection_mode=self.projection_mode,
-                            orig_shape=self.orig_shape)
+                            orig_shape=self.orig_shape)    
     
 def read_mri(filepath: str) -> np.ndarray:
     data = []
@@ -164,23 +203,28 @@ def unify_dataset(data: np.ndarray, shape: tuple=None) -> np.ndarray:
         _, *min_s = np.min(s, axis=0)
     else:
         min_s = shape
-        
+    
     temp = []
-    for dset in data:
-        shifted_dset = dset - np.mean(dset, axis=0)
-        for img in shifted_dset:
+    for subset in data:
+        for img in subset:
             new_img = resize(img, min_s, order=3, preserve_range=True, anti_aliasing=True)
             temp.append(new_img)
     
     resized_dataset = np.array(temp)
     resized_dataset = np.array([normalize_image(x) for x in resized_dataset])
-    w, h = min_s[:2]
     
-    return resized_dataset, w, h
+    mean_tensor = np.mean(resized_dataset, axis=0)
+    resized_dataset -= mean_tensor
+    
+    return resized_dataset
 
-def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial", precomputed: bool = False) -> None:
-    dataset = list(data.values())
+def generate_reduced_dataset(kernel: str, data: Dict[str, np.ndarray], plane: str="axial", precomputed: bool = False, other: tuple = None) -> None:
+    dataset = tuple(data.values())
     namings = list(data.keys())
+    unified_dataset, ranges = other
+    
+    w, h = unified_dataset[0].shape[:2]
+    c = 3
         
     mpca_pth = os.path.join(SAVED_MODELS_PATH, "mpca", f"{plane}_mpca.npz")
     
@@ -188,13 +232,10 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial", pr
         os.makedirs(os.path.dirname(mpca_pth))
         
     if not precomputed:
-        unified_dataset, w, h = unify_dataset(dataset)
-        c = 3
-        
         plane2shape = {"sagital": (w, h, c), "frontal": (w, c, h), "axial"  : (c, w, h)}
         shape = plane2shape[plane]
         
-        mpca = MPCA(15, shape, plane)
+        mpca = MPCA(kernel=kernel, degree=3, max_iter=15, ranks=shape, projection_mode=plane)
         
         reduced_dataset = mpca.fit_transform(unified_dataset)
             
@@ -205,15 +246,6 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial", pr
         
         unified_dataset, _, _ = unify_dataset(dataset, shape=mpca.orig_shape)
         reduced_dataset = mpca.transform(unified_dataset)
-        
-    sizes  = [len(dset) for dset in dataset]
-    ranges = []
-
-    l, r = 0, 0
-    for s in sizes:
-        r += s
-        ranges.append((l, r))
-        l = r
         
     out_dir = os.path.join(REDUCED_DATASET_PATH, plane)
     if not os.path.exists(out_dir):
@@ -236,21 +268,33 @@ def generate_reduced_dataset(data: Dict[str, np.ndarray], plane: str="axial", pr
         name = namings[name_ind]
         plt.imsave(os.path.join(out_dir, f"{name}_{i}.png"), img)
 
+def calculate_ranges(dataset: list[np.ndarray]) -> list:
+    sizes  = [len(dset) for dset in dataset]
+    ranges = []
+
+    l, r = 0, 0
+    for s in sizes:
+        r += s
+        ranges.append((l, r))
+        l = r
+        
+    return ranges
+
 if __name__ == "__main__":
-    parkinson = read_mri(PARKINSON_DATASET_PATH)
-    autism    = read_mri(AUTISM_DATASET_PATH)
-    control   = read_mri(CONTROL_DATASET_PATH)
-    control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
-    alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
-    adhd      = read_mri(ADHD_DATASET_PATH)
-    sclerosis  = read_mri(SCLEROSIS_DATASET_PATH)
-
-    namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "autism", "sclerosis"]
-    dataset   = [parkinson, control, control_ixi, alzheimer, adhd, autism, sclerosis]
-
+    dataset = []
+    namings = []
+    
+    for pth in [PARKINSON_DATASET_PATH, AUTISM_DATASET_PATH, OLD_ABIDE_CONTROL_DATASET_PATH, ABIDE_CONTROL_DATASET_PATH, IXI_CONTROL_DATASET_PATH, ALZHEIMER_DATASET_PATH, ADHD_DATASET_PATH, SCLEROSIS_DATASET_PATH]:
+        dataset.append(read_mri(pth))
+        d = pth.split("/")[-1]
+        namings.append(d)
+        
+    unified_dataset = unify_dataset(dataset)
+    ranges = calculate_ranges(dataset)
+    
     data = dict(zip(namings, dataset))
-
+    other = (unified_dataset, ranges)
     for plane in ["axial", "sagital", "frontal"]:
         print(plane)
-        generate_reduced_dataset(data, plane, precomputed=False)
+        generate_reduced_dataset("sigmoid", data, plane, precomputed=False, other = other)
         print("\n\n")

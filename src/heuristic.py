@@ -23,7 +23,7 @@ class HeuristicSlicing():
         
     def score(self, slice: np.ndarray) -> float:
         if self.mode == "cov":
-            cov_mat = (slice.T @ slice) / (slice.shape[0] - 1)
+            cov_mat = (slice @ slice.T) / (slice.shape[0] - 1)
             
             return np.linalg.norm(cov_mat, ord="fro")
         else:
@@ -74,16 +74,13 @@ class HeuristicSlicing():
         return self.transform(volume)
 
 def main() -> None:
-    parkinson = read_mri(PARKINSON_DATASET_PATH)
-    autism    = read_mri(AUTISM_DATASET_PATH)
-    control   = read_mri(CONTROL_DATASET_PATH)
-    control_ixi = read_mri(CONTROL_IXI_DATASET_PATH)
-    alzheimer = read_mri(ALZHEIMER_DATASET_PATH)
-    adhd      = read_mri(ADHD_DATASET_PATH)
-    sclerosis  = read_mri(SCLEROSIS_DATASET_PATH)
-
-    namings   = ["parkinson", "control", "control_ixi", "alzheimer", "adhd", "autism", "sclerosis"]
-    dataset   = [parkinson, control, control_ixi, alzheimer, adhd, autism, sclerosis]
+    dataset = []
+    namings = []
+    
+    for pth in [PARKINSON_DATASET_PATH, AUTISM_DATASET_PATH, OLD_ABIDE_CONTROL_DATASET_PATH, ABIDE_CONTROL_DATASET_PATH, IXI_CONTROL_DATASET_PATH, ALZHEIMER_DATASET_PATH, ADHD_DATASET_PATH, SCLEROSIS_DATASET_PATH]:
+        dataset.append(read_mri(pth))
+        d = pth.split("/")[-1]
+        namings.append(d)
 
     data = zip(namings, dataset)
     
