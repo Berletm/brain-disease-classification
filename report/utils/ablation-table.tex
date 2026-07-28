@@ -1,0 +1,19 @@
+\begin{table*}[t!]
+\centering
+\caption{Результаты абляционного исследования}
+\label{tab:ablation}
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{ccccc}
+\toprule
+\textbf{Вариант архитектуры} & \textbf{Accuracy} & \textbf{Macro Recall} & \textbf{Macro Precision} & \textbf{Macro F1} \\
+\midrule
+Single Branch (Эвристический срез) & $0.8318 \pm 0.0285$ & $0.8365 \pm 0.0225$ & $0.8440 \pm 0.0327$ & $0.8157 \pm 0.0296$ \\
+Single Branch (MPCA) & $0.8656 \pm 0.0359$ & $0.8714 \pm 0.0272$ & $0.8702 \pm 0.0413$ & $0.8437 \pm 0.0342$ \\
+Multi Branch (MPCA + Mean) & $0.9108 \pm 0.0269$ & $0.9127 \pm 0.0271$ & $0.9280 \pm 0.0245$ & $0.8939 \pm 0.0255$ \\
+Multi Branch (MPCA + Cat) & $0.9206 \pm 0.0115$ & $0.9203 \pm 0.0122$ & $0.9313 \pm 0.0167$ & $0.8995 \pm 0.0162$ \\
+Multi Branch (MPCA + MHA + Mean) & $0.9053 \pm 0.0279$ & $0.9056 \pm 0.0292$ & $0.9170 \pm 0.0315$ & $0.8883 \pm 0.0293$ \\
+\textbf{Multi Branch (MPCA + MHA + Cat)} & $\mathbf{0.9223 \pm 0.0089}$ & $\mathbf{0.9226 \pm 0.0090}$ & $\mathbf{0.9359 \pm 0.0135}$ & $\mathbf{0.9022 \pm 0.0125}$ \\
+\bottomrule
+\end{tabular}
+\end{table*}

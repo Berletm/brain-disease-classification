@@ -162,11 +162,13 @@ class Baseline(nn.Module):
         raise NotImplementedError
 
 class MultiBranchAttention(Baseline):
-    def __init__(self, base_model:str, hidden_dim:int, num_classes:int, attention_dim:int, attention_heads:int, return_attention_scores:bool=False):
+    def __init__(self, base_model:str, hidden_dim:int, num_classes:int, attention_dim:int, attention_heads:int, aggregation: str="mean", return_attention_scores:bool=False):
         super().__init__(base_model, num_classes, hidden_dim)
         self.attention_heads = attention_heads
         self.attention_dim   = attention_dim
-        self.clf_head[0] = nn.Linear(3 * self.feature_dim, hidden_dim, device=device)
+        self.aggregation = aggregation
+        if aggregation == "cat":
+            self.clf_head[0] = nn.Linear(3 * self.feature_dim, hidden_dim, device=device)
         self.return_attention_scores = return_attention_scores
                 
         self.multi_head_attention = MultiHeadAttention(self.feature_dim, self.attention_dim, self.attention_heads, return_attention_scores)
@@ -177,8 +179,7 @@ class MultiBranchAttention(Baseline):
         sag_logits   = self.model_sag(sag)
 
         logits = torch.stack([ax_logits, front_logits, sag_logits], dim=1)
-        # logits = 1/3 * (ax_logits + front_logits + sag_logits)
-        
+    
         if not self.return_attention_scores:
             ax_attention_logits = self.multi_head_attention(ax_logits, logits)
             front_attention_logits = self.multi_head_attention(front_logits, logits)
@@ -188,8 +189,11 @@ class MultiBranchAttention(Baseline):
             front_attention_logits, front_scores = self.multi_head_attention(front_logits, logits)
             sag_attention_logits, sag_scores = self.multi_head_attention(sag_logits, logits)
         
-        attention_logits = torch.cat([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
-        # attention_logits = 1/3 * (ax_logits + front_logits + sag_logits)
+        if self.aggregation == "cat":
+            attention_logits = torch.cat([ax_attention_logits, front_attention_logits, sag_attention_logits], dim=1)
+        elif self.aggregation == "mean":
+            attention_logits = 1/3 * (ax_logits + front_logits + sag_logits)
+        else: raise RuntimeError(f"Wrong aggregation mode: should be 'mean' or 'cat' got {self.aggregation}")
         
         if self.return_attention_scores:
             return self.clf_head(attention_logits), (ax_scores, front_scores, sag_scores)
@@ -197,14 +201,7 @@ class MultiBranchAttention(Baseline):
         return self.clf_head(attention_logits)
 
     def predict(self, ax: torch.Tensor, front: torch.Tensor, sag: torch.Tensor) -> np.ndarray:
-        ax_logits = self.model_ax(ax)
-        front_logits = self.model_front(front)
-        sag_logits = self.model_sag(sag)
-
-        # logits = 1/3 * (ax_logits + front_logits + sag_logits)
-        logits = torch.cat([ax_logits, front_logits, sag_logits], dim=1)
-
-        logits = self.clf_head(logits)
+        logits = self.forward(ax, front, sag)
 
         p = self.softmax(logits)
 
@@ -389,7 +386,10 @@ def train_multi(n_epoch: int,
 def train_step(x, y, model: nn.Module, optimizer: torch.optim.Optimizer, criterion: nn.Module) -> Tuple[float, torch.Tensor]:
     optimizer.zero_grad()
 
-    output = model(x)
+    if isinstance(model, (MultiBranchAttention, MultiBranchConcat, MultiBranchMean)):
+        output = model(*x)
+    else:
+        output = model(x)
     loss = criterion(output, y)
     preds = torch.argmax(output, dim=1)
 
@@ -505,6 +505,43 @@ def cross_validate_pytorch(
     n_splits: int = 5,
     batch_size: int = 8,
 ):
+    train_transforms = tv.Compose([
+        tv.RandomAffine(
+            degrees=(-7, 7),         
+            translate=(0.08, 0.08),  
+            scale=(0.92, 1.10),       
+            shear=(-7, 7),           
+            interpolation=tv.InterpolationMode.BICUBIC,
+            fill=0
+        ),
+
+        tv.ElasticTransform(
+            alpha=120.,              
+            sigma=8.,                 
+            interpolation=tv.InterpolationMode.BICUBIC,
+            fill=0
+        ),
+
+        tv.RandomHorizontalFlip(p=0.5),
+        tv.RandomVerticalFlip(p=0.15),   
+
+        tv.RandomApply([
+            tv.ColorJitter(
+                brightness=(0.7, 1.4),
+                contrast=(0.75, 1.35),
+                saturation=0.,      
+                hue=0.
+            )
+        ], p=0.45),
+
+        tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
+        tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
+
+        tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
+        tv.ToTensor(),
+        tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
     labels = np.array(dataset.labels)
     indices = np.arange(len(dataset))
     weights = torch.tensor(1 / np.array(dataset.counts), dtype=torch.float32, device=device)
@@ -528,6 +565,7 @@ def cross_validate_pytorch(
         print(f"Fold {fold + 1}/{n_splits}")
 
         train_subset = Subset(dataset, train_idx)
+        train_subset.x_transforms = train_transforms
         val_subset = Subset(dataset, val_idx)
 
         train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
@@ -788,13 +826,14 @@ def find_hyperparams(train_ds: Subset, max_time: int=3600) -> dict:
 def write_cv_results(ds: AxisHolder, params: dict, other_params: dict, model: Union[SingleBranch, MultiBranchMean, MultiBranchConcat, MultiBranchAttention], train_func: Union[train_single, train_multi]) -> None:
     result = cross_validate_pytorch(ds, model, params, other_params, train_func)
 
-    with open("../models/result.txt", "w+") as file:
+    with open(f"../models/{other_params["filename"]}_result.txt", "w+") as file:
         file.write(f"f1:        {np.mean(result['fold_f1']):.4f} +- {np.std(result['fold_f1']):.4f}\n")
         file.write(f"recall:    {np.mean(result['fold_recall']):.4f} +- {np.std(result['fold_recall']):.4f}\n")
         file.write(f"precision: {np.mean(result['fold_precision']):.4f} +- {np.std(result['fold_precision']):.4f}\n")
         file.write(f"accuracy:  {np.mean(result['fold_accuracies']):.4f} +- {np.std(result['fold_accuracies']):.4f}\n")
 
-def main() -> None:
+
+def cv_all() -> None:
     x_base_transforms = tv.Compose(
     [
         tv.ToTensor(),
@@ -803,80 +842,118 @@ def main() -> None:
                      std=[0.229, 0.224, 0.225]),
     ])
     
-    train_transforms = tv.Compose([
-        tv.RandomAffine(
-            degrees=(-7, 7),         
-            translate=(0.08, 0.08),  
-            scale=(0.92, 1.10),       
-            shear=(-7, 7),           
-            interpolation=tv.InterpolationMode.BICUBIC,
-            fill=0
-        ),
-
-        tv.ElasticTransform(
-            alpha=120.,              
-            sigma=8.,                 
-            interpolation=tv.InterpolationMode.BICUBIC,
-            fill=0
-        ),
-
-        tv.RandomHorizontalFlip(p=0.5),
-        tv.RandomVerticalFlip(p=0.15),   
-
-        tv.RandomApply([
-            tv.ColorJitter(
-                brightness=(0.7, 1.4),
-                contrast=(0.75, 1.35),
-                saturation=0.,      
-                hue=0.
-            )
-        ], p=0.45),
-
-        tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
-        tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
-
-        tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
-        tv.ToTensor(),
-        tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-     
-    multi_ds  = SliceHolder(HEURISTIC_DATASET_PATH, x_base_transforms)
+    single_ds = SliceHolder(HEURISTIC_DATASET_PATH, x_base_transforms)
+    single_mpca_ds = SliceHolder(REDUCED_DATASET_PATH + "/axial", x_base_transforms)
+    multi_ds  = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
     
-    indices = np.arange(len(multi_ds))
-    labels  = np.array(multi_ds.labels)
-
-    train_idx, test_idx, _, _ = train_test_split(
-        indices, labels, test_size=0.2, stratify=labels, random_state=42
-    )
-
-    train_multi_ds = Subset(multi_ds, train_idx)
-    test_multi_ds  = Subset(multi_ds, test_idx)
-    train_multi_ds.x_transforms = train_transforms
-
     best_multi_attention_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512, 'attention_dim': 128, 'attention_heads': 32}
     best_params_other = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512}
     other_params = {"gamma": 3, "smoothing": 0.188, "lr": 3e-4}
-    # best_params = {"attention_dim": 512, "attention_heads": 32, "base_model": "resnet34", "gamma": 3, "hidden_dim": 512, "lr": 0.0003153406138383622, "smoothing": 0.1882631069929521}
     
-    train_multi_loader = DataLoader(train_multi_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    test_multi_loader  = DataLoader(test_multi_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    other_params["filename"] = "single_heuristic"
+    write_cv_results(single_ds, best_params_other, other_params, SingleBranch, train_single)
     
-    _, counts = np.unique(np.array(multi_ds.labels)[train_idx], return_counts=True)
-    final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
+    other_params["filename"] = "single_mpca"
+    write_cv_results(single_mpca_ds, best_params_other, other_params, SingleBranch, train_single)
+    
+    other_params["filename"] = "multi_mean"
+    write_cv_results(multi_ds, best_params_other, other_params, MultiBranchMean, train_multi)
+    
+    other_params["filename"] = "multi_cat"
+    write_cv_results(multi_ds, best_params_other, other_params, MultiBranchConcat, train_multi)
+    
+    # mean
+    other_params["filename"] = "multi_attention_mean"
+    best_multi_attention_params["aggregation"] = "mean"
+    write_cv_results(multi_ds, best_multi_attention_params, other_params, MultiBranchAttention, train_multi)
+    
+    # cat
+    other_params["filename"] = "multi_attention_cat"
+    best_multi_attention_params["aggregation"] = "cat"
+    write_cv_results(multi_ds, best_multi_attention_params, other_params, MultiBranchAttention, train_multi)
 
-    # params = find_hyperparams(train_multi_ds, 7200)
+def main() -> None:
+    # x_base_transforms = tv.Compose(
+    # [
+    #     tv.ToTensor(),
+    #     tv.Resize((224, 224)),
+    #     tv.Normalize(mean=[0.485, 0.456, 0.406],
+    #                  std=[0.229, 0.224, 0.225]),
+    # ])
+    
+    # train_transforms = tv.Compose([
+    #     tv.RandomAffine(
+    #         degrees=(-7, 7),         
+    #         translate=(0.08, 0.08),  
+    #         scale=(0.92, 1.10),       
+    #         shear=(-7, 7),           
+    #         interpolation=tv.InterpolationMode.BICUBIC,
+    #         fill=0
+    #     ),
+
+    #     tv.ElasticTransform(
+    #         alpha=120.,              
+    #         sigma=8.,                 
+    #         interpolation=tv.InterpolationMode.BICUBIC,
+    #         fill=0
+    #     ),
+
+    #     tv.RandomHorizontalFlip(p=0.5),
+    #     tv.RandomVerticalFlip(p=0.15),   
+
+    #     tv.RandomApply([
+    #         tv.ColorJitter(
+    #             brightness=(0.7, 1.4),
+    #             contrast=(0.75, 1.35),
+    #             saturation=0.,      
+    #             hue=0.
+    #         )
+    #     ], p=0.45),
+
+    #     tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
+    #     tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
+
+    #     tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
+    #     tv.ToTensor(),
+    #     tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    # ])
+     
+    # multi_ds  = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
+    
+    # indices = np.arange(len(multi_ds))
+    # labels  = np.array(multi_ds.labels)
+
+    # train_idx, test_idx, _, _ = train_test_split(
+    #     indices, labels, test_size=0.2, stratify=labels, random_state=42
+    # )
+
+    # train_multi_ds = Subset(multi_ds, train_idx)
+    # test_multi_ds  = Subset(multi_ds, test_idx)
+    # train_multi_ds.x_transforms = train_transforms
+
+    # best_multi_attention_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512, 'attention_dim': 128, 'attention_heads': 32}
+    # best_params_other = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512}
+    # other_params = {"gamma": 3, "smoothing": 0.188, "lr": 3e-4}
+    # # best_params = {"attention_dim": 512, "attention_heads": 32, "base_model": "resnet34", "gamma": 3, "hidden_dim": 512, "lr": 0.0003153406138383622, "smoothing": 0.1882631069929521}
+    
+    # train_multi_loader = DataLoader(train_multi_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    # test_multi_loader  = DataLoader(test_multi_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    
+    # _, counts = np.unique(np.array(multi_ds.labels)[train_idx], return_counts=True)
+    # final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
+
+    # # params = find_hyperparams(train_multi_ds, 7200)
     
     # criterion = FocalLoss(3, final_weights, 0.15)
     # attention_model: MultiBranchAttention = MultiBranchAttention(
-    #     base_model=best_params["base_model"],
+    #     base_model=best_multi_attention_params["base_model"],
     #     num_classes=6,
-    #     attention_dim=best_params["attention_dim"],
-    #     hidden_dim=best_params["hidden_dim"],
-    #     attention_heads=best_params["attention_heads"]
+    #     attention_dim=best_multi_attention_params["attention_dim"],
+    #     hidden_dim=best_multi_attention_params["hidden_dim"],
+    #     attention_heads=best_multi_attention_params["attention_heads"]
     # )
 
-    write_cv_results(multi_ds, best_params_other, other_params, SingleBranch, train_single)
-    
+    cv_all()    
     
     # model: MultiBranchAttention = train_multi(100, attention_model, 3e-4, criterion, train_multi_loader, test_multi_loader)
 

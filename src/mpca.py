@@ -296,5 +296,5 @@ if __name__ == "__main__":
     other = (unified_dataset, ranges)
     for plane in ["axial", "sagital", "frontal"]:
         print(plane)
-        generate_reduced_dataset("sigmoid", data, plane, precomputed=False, other = other)
+        generate_reduced_dataset("linear", data, plane, precomputed=False, other = other)
         print("\n\n")
