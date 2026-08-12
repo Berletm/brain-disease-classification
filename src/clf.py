@@ -278,6 +278,29 @@ class MultiBranchMean(Baseline):
 
         return torch.argmax(p, dim=1).cpu().numpy()
 
+class MultiBranchRNN(Baseline):
+    def __init__(self, base_model, num_classes, hidden_dim, lstm_dim):
+        super().__init__(base_model, num_classes, hidden_dim)
+        self.lstm = nn.LSTM(input_size=self.feature_dim, hidden_size=lstm_dim, batch_first=True, bidirectional=True)
+        self.clf_head[0] = nn.Linear(2 * lstm_dim, hidden_dim)
+        
+    def forward(self, ax, front, sag) -> torch.Tensor:
+        ax_logits    = self.model_ax(ax)
+        front_logits = self.model_front(front)
+        sag_logits   = self.model_sag(sag)
+
+        logits = torch.stack([ax_logits, front_logits, sag_logits], dim=1)
+        
+        out, _ = self.lstm(logits)
+
+        return self.clf_head(out[:, -1, :])
+    
+    def predict(self, ax, front, sag) -> torch.Tensor:
+        logits = self.forward(ax, front, sag)
+        
+        return self.softmax(logits)
+
+        
 def train_multi(n_epoch: int,
                 model: Union[MultiHeadAttention, MultiBranchConcat, MultiBranchMean],
                 lr: float,
@@ -386,7 +409,7 @@ def train_multi(n_epoch: int,
 def train_step(x, y, model: nn.Module, optimizer: torch.optim.Optimizer, criterion: nn.Module) -> Tuple[float, torch.Tensor]:
     optimizer.zero_grad()
 
-    if isinstance(model, (MultiBranchAttention, MultiBranchConcat, MultiBranchMean)):
+    if isinstance(model, (MultiBranchAttention, MultiBranchConcat, MultiBranchMean, MultiBranchRNN)):
         output = model(*x)
     else:
         output = model(x)
@@ -467,7 +490,7 @@ def validate(model: Union[SingleBranch, MultiBranchAttention, MultiBranchConcat,
     
     with torch.no_grad():
         for img, label in val_loader:
-            if isinstance(model, (MultiBranchAttention, MultiBranchConcat, MultiBranchMean)):
+            if isinstance(model, (MultiBranchAttention, MultiBranchConcat, MultiBranchMean, MultiBranchRNN)):
                 ax, front, sag = img
                 ax = ax.to(device)
                 front = front.to(device)
@@ -873,96 +896,95 @@ def cv_all() -> None:
     write_cv_results(multi_ds, best_multi_attention_params, other_params, MultiBranchAttention, train_multi)
 
 def main() -> None:
-    # x_base_transforms = tv.Compose(
-    # [
-    #     tv.ToTensor(),
-    #     tv.Resize((224, 224)),
-    #     tv.Normalize(mean=[0.485, 0.456, 0.406],
-    #                  std=[0.229, 0.224, 0.225]),
-    # ])
+    x_base_transforms = tv.Compose(
+    [
+        tv.ToTensor(),
+        tv.Resize((224, 224)),
+        tv.Normalize(mean=[0.485, 0.456, 0.406],
+                     std=[0.229, 0.224, 0.225]),
+    ])
     
-    # train_transforms = tv.Compose([
-    #     tv.RandomAffine(
-    #         degrees=(-7, 7),         
-    #         translate=(0.08, 0.08),  
-    #         scale=(0.92, 1.10),       
-    #         shear=(-7, 7),           
-    #         interpolation=tv.InterpolationMode.BICUBIC,
-    #         fill=0
-    #     ),
+    train_transforms = tv.Compose([
+        tv.RandomAffine(
+            degrees=(-7, 7),         
+            translate=(0.08, 0.08),  
+            scale=(0.92, 1.10),       
+            shear=(-7, 7),           
+            interpolation=tv.InterpolationMode.BICUBIC,
+            fill=0
+        ),
 
-    #     tv.ElasticTransform(
-    #         alpha=120.,              
-    #         sigma=8.,                 
-    #         interpolation=tv.InterpolationMode.BICUBIC,
-    #         fill=0
-    #     ),
+        tv.ElasticTransform(
+            alpha=120.,              
+            sigma=8.,                 
+            interpolation=tv.InterpolationMode.BICUBIC,
+            fill=0
+        ),
 
-    #     tv.RandomHorizontalFlip(p=0.5),
-    #     tv.RandomVerticalFlip(p=0.15),   
+        tv.RandomHorizontalFlip(p=0.5),
+        tv.RandomVerticalFlip(p=0.15),   
 
-    #     tv.RandomApply([
-    #         tv.ColorJitter(
-    #             brightness=(0.7, 1.4),
-    #             contrast=(0.75, 1.35),
-    #             saturation=0.,      
-    #             hue=0.
-    #         )
-    #     ], p=0.45),
+        tv.RandomApply([
+            tv.ColorJitter(
+                brightness=(0.7, 1.4),
+                contrast=(0.75, 1.35),
+                saturation=0.,      
+                hue=0.
+            )
+        ], p=0.45),
 
-    #     tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
-    #     tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
+        tv.RandomApply([tv2.GaussianNoise(sigma=0.015)], p=0.25),
+        tv.RandomApply([tv.GaussianBlur(kernel_size=3, sigma=(0.4, 1.4))], p=0.20),
 
-    #     tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
-    #     tv.ToTensor(),
-    #     tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    # ])
+        tv.Resize((224, 224), interpolation=tv.InterpolationMode.BICUBIC),
+        tv.ToTensor(),
+        tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
      
-    # multi_ds  = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
+    multi_ds  = AxisHolder(REDUCED_DATASET_PATH, x_base_transforms)
     
-    # indices = np.arange(len(multi_ds))
-    # labels  = np.array(multi_ds.labels)
+    indices = np.arange(len(multi_ds))
+    labels  = np.array(multi_ds.labels)
 
-    # train_idx, test_idx, _, _ = train_test_split(
-    #     indices, labels, test_size=0.2, stratify=labels, random_state=42
-    # )
+    train_idx, test_idx, _, _ = train_test_split(
+        indices, labels, test_size=0.2, stratify=labels, random_state=42
+    )
 
-    # train_multi_ds = Subset(multi_ds, train_idx)
-    # test_multi_ds  = Subset(multi_ds, test_idx)
-    # train_multi_ds.x_transforms = train_transforms
+    train_multi_ds = Subset(multi_ds, train_idx)
+    test_multi_ds  = Subset(multi_ds, test_idx)
+    train_multi_ds.x_transforms = train_transforms
 
-    # best_multi_attention_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512, 'attention_dim': 128, 'attention_heads': 32}
-    # best_params_other = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512}
-    # other_params = {"gamma": 3, "smoothing": 0.188, "lr": 3e-4}
-    # # best_params = {"attention_dim": 512, "attention_heads": 32, "base_model": "resnet34", "gamma": 3, "hidden_dim": 512, "lr": 0.0003153406138383622, "smoothing": 0.1882631069929521}
+    best_multi_attention_params = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512, 'attention_dim': 128, 'attention_heads': 32}
+    best_params_other = {'base_model': 'convnext_tiny', "num_classes":6, 'hidden_dim': 512}
+    other_params = {"gamma": 3, "smoothing": 0.188, "lr": 3e-4}
+    # best_params = {"attention_dim": 512, "attention_heads": 32, "base_model": "resnet34", "gamma": 3, "hidden_dim": 512, "lr": 0.0003153406138383622, "smoothing": 0.1882631069929521}
     
-    # train_multi_loader = DataLoader(train_multi_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
-    # test_multi_loader  = DataLoader(test_multi_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    train_multi_loader = DataLoader(train_multi_ds, batch_size=8, shuffle=True, num_workers=1, pin_memory=True, generator=g)
+    test_multi_loader  = DataLoader(test_multi_ds, batch_size=4, shuffle=True, num_workers=1, pin_memory=True, generator=g)
     
-    # _, counts = np.unique(np.array(multi_ds.labels)[train_idx], return_counts=True)
-    # final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
+    _, counts = np.unique(np.array(multi_ds.labels)[train_idx], return_counts=True)
+    final_weights = torch.tensor(1.0 / counts, dtype=torch.float32, device=device)
 
-    # # params = find_hyperparams(train_multi_ds, 7200)
+    # params = find_hyperparams(train_multi_ds, 7200)
+
+    # cv_all()
     
-    # criterion = FocalLoss(3, final_weights, 0.15)
-    # attention_model: MultiBranchAttention = MultiBranchAttention(
-    #     base_model=best_multi_attention_params["base_model"],
-    #     num_classes=6,
-    #     attention_dim=best_multi_attention_params["attention_dim"],
-    #     hidden_dim=best_multi_attention_params["hidden_dim"],
-    #     attention_heads=best_multi_attention_params["attention_heads"]
-    # )
-
-    cv_all()    
+    model = MultiBranchAttention(base_model=best_multi_attention_params["base_model"],
+                                 hidden_dim=best_multi_attention_params["hidden_dim"],
+                                 num_classes=best_multi_attention_params["num_classes"],
+                                 attention_dim=best_multi_attention_params["attention_dim"],
+                                 attention_heads=best_multi_attention_params["attention_heads"],
+                                 aggregation="cat")
+    criterion = FocalLoss(other_params["gamma"], final_weights, other_params["smoothing"])
     
-    # model: MultiBranchAttention = train_multi(100, attention_model, 3e-4, criterion, train_multi_loader, test_multi_loader)
+    model = train_multi(100, model, 3e-4, criterion, train_multi_loader, test_multi_loader)
 
-    # val_loss, (val_acc, f1, recall, precision), cm = validate(model, criterion, test_multi_loader)
-    # print(f"{val_acc} {f1} {recall} {precision}")
-    # save_confusion_matrix(cm, ["Контрольная группа", "Паркинсон", "Альцгеймер", "СДВГ", "Рассеянный склероз", "РАС"])
-    # disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-    # disp.plot()
-    # plt.show()
+    val_loss, (val_acc, f1, recall, precision), cm = validate(model, criterion, test_multi_loader)
+    print(f"{val_acc} {f1} {recall} {precision}")
+    save_confusion_matrix(cm, ["Контрольная группа", "Паркинсон", "Альцгеймер", "СДВГ", "Рассеянный склероз", "РАС"])
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    disp.plot()
+    plt.show()
 
 
 if __name__ == "__main__":
