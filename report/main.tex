@@ -1,31 +1,62 @@
-\documentclass[twocolumn]{article}
+\documentclass[eqsecnum, authorsinfo]{kioj6}
 
-\usepackage[margin=1.2cm]{geometry}
-\usepackage[utf8]{inputenc}
-\usepackage[T2A]{fontenc}
-\usepackage[russian]{babel} 
-\usepackage{amsmath, amssymb, amsfonts} 
-\usepackage{graphicx} 
-\usepackage{booktabs} 
-\usepackage{algorithm} 
-\usepackage{algorithmic} 
-\usepackage[hidelinks]{hyperref}
-\usepackage{xcolor}
-\usepackage{csquotes}
+% Пакеты, используемые непосредственно в тексте статьи.
+\usepackage{amsmath}
+\usepackage{booktabs}
 \usepackage{tabularx}
-\usepackage{subcaption}
-\usepackage{stfloats}
-\usepackage[backend=biber, style=numeric]{biblatex}
-\usepackage{soul}
-\addbibresource{cites.bib}
 
-\title{\textbf{MRI Classification via MPCA Orthogonal Projections and Multi-Branch Attention CNN}}
-\author{Берлет Максим Валерьевич \texttt{berletmaximq@gmail.com} \\ Филатов Антон Юрьевич \texttt{ant.filatov@gmail.com}}
-\date{}
+% ==================== НАСТРОЙКИ ЖУРНАЛА ====================
+
+\setcounter{page}{1}
+% Номер выпуска и DOI не задаются авторами на этапе подачи рукописи.
+\issue{2026}{--}{edu}
+\journalsectionnoimage{artificial-intelligence}
+\articletype{1}
+
+\udknumber{999.999}
+\doinumber{10.32603/2071-2340-2026-4-XXX-XXX}
+
+% ==================== ДАННЫЕ СТАТЬИ ====================
+% =============== Ru ================
+
+\title[MPCA-Attention]
+      {MPCA-Attention: многоветвистая CNN для классификации МРТ посредством ортогональных проекций}
+
+\author{1}[Берлет М.~В.\affil{1}]{Берлет Максим Валерьевич}
+\authorinfo{1}{студент 4 курса прикладной математики и информатики, СПбГЭТУ «ЛЭТИ»}
+\authoremailEnvelope{1}{berletmaximq@gmail.com}
+\authororcid{1}{https://orcid.org/0009-0003-0513-3806}
+
+
+\author{2}[Филатов А.~Ю.\affil{1}]{Филатов Антон Юрьевич}
+\authorinfo{2}{кандидат технических наук, доцент кафедры Кафедра математического обеспечения и применения ЭВМ СПбГЭТУ «ЛЭТИ»}
+\authoremail{2}{aifilatov@etu.ru}
+\authororcid{2}{https://orcid.org/0000-0003-4298-8523}
+
+\affiliation{1}{Санкт-Петербургский государственный электротехнический университет «ЛЭТИ» им. В. И. Ульянова (Ленина), Российская Федерация, 197022, Санкт-Петербург,
+	ул. Профессора Попова, 5}
+
+% =============== Eng ================
+
+\titleen[MPCA-Attention]
+        {MPCA-Attention: Multi-Branch CNN for MRI Classification via Orthogonal Projections}
+
+\authoren{1}[Berlet M.~V.\affil{1}]{Berlet Maxim}
+\authorinfoen{1}{4 year student of applied math and computer science, SPBETU «LETI»}
+
+\authoren{2}[Filatov A.~Y.\affil{1}]{Filatov Anton}
+\authorinfoen{2}{PhD in Engineering, Associate Professor of the Department of Software Engineering and Computer Applications}
+
+\affiliationen{1}{Saint Petersburg State Electrotechnical University “LETI”, Professora Popova ul. 5, St. Petersburg, 197022, Russian Federation}
 
 \begin{document}
 
+\russianversion
 \maketitle
+\pagestyle{mainstyle}
+
+% Для русскоязычной версии без отдельной переводной части используются обычные цитирования.
+\let\cite\originalcite
 
 \begin{abstract}
 
@@ -36,7 +67,9 @@
 для адаптивного взвешивания информационных потоков. Оценка проводилась на выборке из 358 снимков пациентов методом 5-кратной кросс-валидации. В качестве метрик использованы точность (Accuracy) и Macro F1-мера.
 На Hold-out валидации модель продемонстрировала Accuracy = 0.9444 и Macro-F1 = 0.9592.
 
-Ключевые слова --- Multilinear Principal Component Analysis; Многоветвистая сверточная нейросеть; Многоголовое внимание; Позднее слияние признаков; Классификация; МРТ;
+\keywordsru{Multilinear Principal Component Analysis; Многоветвистая сверточная нейросеть; Многоголовое внимание; Позднее слияние признаков; Классификация; МРТ;}
+
+\autocitation
 
 \end{abstract}
 
@@ -73,6 +106,7 @@
 
 Основной вклад работы заключается в разработке подхода, демонстрирующего высокую обобщающую способность в условиях ограниченного объёма размеченных данных.
 
+\pagebreak
 \section{Аналитический обзор}
 % !!!! Здесь датасет поверь мне брат взятый из гугл картинок
 
@@ -151,12 +185,12 @@
 предобработанных данных после удаления черепа (до 0.99), так и на «сырых» снимках, содержащих костные структуры (до 0.96). 
 Существенным преимуществом данного подхода является высокая параметрическая эффективность модели (~13 млн параметров), что снижает требования к вычислительным ресурсам.
 
-Несмотря на архитектурное разнообразие рассмотренных подходов \cite{1,2,3,4,5}, большинство из них страдает от системных методологических недостатков, связанных с формированием обучающих выборок. Во-первых, наблюдается использование неясных данных. Работы \cite{1, 3, 4} опираются на наборы данных (такие как агрегаторы \href{https://www.kaggle.com/datasets/sartajbhuvaji/brain-tumor-classification-mri/data}{Sartajbhuvaji} и \href{https://www.kaggle.com/datasets/navoneel/brain-mri-images-for-brain-tumor-detection/data}{Br35H}), первоисточниками которых в ряде случаев выступают неструктурированные поисковые запросы (Google Images) или непроверенные пользовательские репозитории. Отсутствие верифицированного протокола формирования наборов не позволяет исключить риск неконтролируемой утечки данных (data leakage) и не гарантирует их клинической репрезентативности. 
-Во-вторых, во всех рассмотренных исследованиях \cite{1, 2, 3, 4, 5} отсутствует формализованное описание этапа экстракции признаков. Авторы используют либо готовые двумерные проекции из агрегированных наборов \cite{1, 3, 4}, либо самостоятельно извлекают отдельные срезы из валидных объемных МРТ-тензоров (например, BraTS 2015 или figshare) \cite{2, 5}. При этом критерии отбора конкретных срезов (например, фиксация координат, наличие опухоли, метод аугментации) нигде не регламентируются. Подобная непрозрачность этапа предобработки снижает воспроизводимость результатов и ставит под сомнение надежность моделей, поскольку принцип выбора информативных 2D-срезов критически важен для качества итоговой диагностики. 
+Несмотря на архитектурное разнообразие рассмотренных подходов \cite{1,2,3,4,5}, большинство из них страдает от системных методологических недостатков, связанных с формированием обучающих выборок. Во-первых, наблюдается использование неясных данных. Работы \cite{1,3,4} опираются на наборы данных (такие как агрегаторы \href{https://www.kaggle.com/datasets/sartajbhuvaji/brain-tumor-classification-mri/data}{Sartajbhuvaji} и \href{https://www.kaggle.com/datasets/navoneel/brain-mri-images-for-brain-tumor-detection/data}{Br35H}), первоисточниками которых в ряде случаев выступают неструктурированные поисковые запросы (Google Images) или непроверенные пользовательские репозитории. Отсутствие верифицированного протокола формирования наборов не позволяет исключить риск неконтролируемой утечки данных (data leakage) и не гарантирует их клинической репрезентативности. 
+Во-вторых, во всех рассмотренных исследованиях \cite{1,2,3,4,5} отсутствует формализованное описание этапа экстракции признаков. Авторы используют либо готовые двумерные проекции из агрегированных наборов \cite{1,3,4}, либо самостоятельно извлекают отдельные срезы из валидных объемных МРТ-тензоров (например, BraTS 2015 или figshare) \cite{2,5}. При этом критерии отбора конкретных срезов (например, фиксация координат, наличие опухоли, метод аугментации) нигде не регламентируются. Подобная непрозрачность этапа предобработки снижает воспроизводимость результатов и ставит под сомнение надежность моделей, поскольку принцип выбора информативных 2D-срезов критически важен для качества итоговой диагностики. 
 В отличие от рассмотренных работ, предлагаемый подход не требует значительных вычислительных ресурсов и больших объемов данных засчет использования 
-предобученных моделей, притом имеет максимально прозрачную методологию эксперимента (см. раздел 3).
+предобученных моделей, притом имеет максимально прозрачную методологию эксперимента (см. раздел \ref{sec:methodology}).
 
-\section{Метод}
+\section{Метод}\label{sec:methodology}
 
 \subsection{Описание набора данных}
 
@@ -194,7 +228,7 @@
 
 На втором этапе к агрегированному набору данных был применен модифицированный итеративный алгоритм снижения размерности тензорных данных --- многомерный анализ главных компонент (MPCA, Multilinear Principal Component Analysis).
 
-\subsection{Обоснование и применение алгоритма MPCA}
+\subsection{Применение алгоритма MPCA}
 
 Алгоритм MPCA \cite{6} является многомерным обобщением классического метода главных компонент (PCA\cite{pca}). Его ключевым преимуществом является возможность непосредственной работы с тензорами произвольной размерности без их предварительного развертывания в векторы. В контексте данной работы рассматриваются тензоры строго определенной размерности, что позволяет формализовать задачу с учетом специфики предметной области.
 
@@ -221,37 +255,56 @@
 
 \begin{figure}[htbp]
     \centering
-    \begin{subfigure}{0.3\columnwidth}
+
+    \begin{subfigure}[c]{0.33\linewidth}
         \centering
-        \includegraphics[width=0.7\columnwidth, keepaspectratio, angle=90]{utils/ax.png}
+        \includegraphics[
+            width=0.8\linewidth,
+            height=4.3cm,
+            keepaspectratio,
+            angle=90,
+            origin=c
+        ]{utils/ax.png}
         \caption{Аксиальная}
         \label{fig:sub1}
-    \end{subfigure}\hfill
-    \begin{subfigure}{0.3\columnwidth}
+    \end{subfigure}\hfill%
+    \begin{subfigure}[c]{0.33\linewidth}
         \centering
-        \includegraphics[width=0.7\columnwidth, keepaspectratio, angle=90]{utils/front.png}
+        \includegraphics[
+            width=0.8\linewidth,
+            height=4cm,
+            keepaspectratio,
+            angle=90,
+            origin=c
+        ]{utils/front.png}
         \caption{Фронтальная}
         \label{fig:sub2}
-    \end{subfigure}\hfill
-    \begin{subfigure}{0.3\columnwidth}
+    \end{subfigure}\hfill%
+    \begin{subfigure}[c]{0.33\linewidth}
         \centering
-        \includegraphics[width=0.7\columnwidth, keepaspectratio, angle=-90]{utils/sag.png}
+        \includegraphics[
+            width=0.8\linewidth,
+            height=4cm,
+            keepaspectratio,
+            angle=-90,
+            origin=c
+        ]{utils/sag.png}
         \caption{Сагиттальная}
         \label{fig:sub3}
     \end{subfigure}
-    
+
     \caption{Пример работы алгоритма MPCA}
     \label{fig:MPCA_example}
 \end{figure}
 
 На картинках \ref{fig:MPCA_example} можно оценить результат работы алгоритма MPCA - проекции вдоль соотвествующих ортогональных осей.
 
-\begin{figure*}[t!]
+\begin{figure}[t!]
     \centering
     \includegraphics[width=0.8\textwidth]{utils/net-visualization.pdf}
     \caption{Архитектура модели}
     \label{fig:network_architecture}
-\end{figure*}
+\end{figure}
 \subsection{Архитектура модели}
 На рисунке \ref{fig:network_architecture} представлено схематическое описание архитектуры.
 
@@ -274,7 +327,7 @@
     \caption{Применяемые техники аугментации данных}
     \label{tab:augmentation}
     \renewcommand{\arraystretch}{1.2}
-    \begin{tabularx}{0.5\textwidth}{>{\ttfamily\footnotesize\raggedright\arraybackslash}X}
+    \begin{tabularx}{\textwidth}{>{\ttfamily\footnotesize\raggedright\arraybackslash}X}
         \toprule
         \textnormal{\textbf{Метод и параметры}} \\
         \midrule
@@ -318,7 +371,7 @@
     \caption{Параметры оптимизатора AdamW}
     \label{tab:optimizer}
     \renewcommand{\arraystretch}{1.2}
-    \begin{tabularx}{0.5\textwidth}{>{\ttfamily\footnotesize\raggedright\arraybackslash}X}
+    \begin{tabularx}{\textwidth}{>{\ttfamily\footnotesize\raggedright\arraybackslash}X}
         \toprule
         \textnormal{\textbf{Оптимизатор и параметры}} \\
         \midrule
@@ -352,15 +405,18 @@
 
 \subsection{Подбор гиперпараметров}
 В связи с малым объемом выборки и высоким риском переобучения для получения несмещённой оценки обобщающей способности модели применялась 
-вложенная стратифицированная 3-кратная кросс-валидация \cite{modelselectionstrategies, biasinerrorestimation}. Стратификация обеспечивала сохранение пропорций целевых классов в каждом разбиении \cite{studyofcross-validation}. 
+вложенная стратифицированная 3-кратная кросс-валидация \cite{modelselectionstrategies,biasinerrorestimation}. Стратификация обеспечивала сохранение пропорций целевых классов в каждом разбиении \cite{studyofcross-validation}. 
 Количество внешних фолдов было установлено равным трём вследствие ограниченного объёма доступных данных.
-\pagebreak
+
 В качестве целевой метрики для подбора гиперпараметров и итоговой оценки модели был выбран \textbf{Macro F1-score} \cite{measuresforclassificationtasks}. 
-\begin{align*}
-Precision_c = \dfrac{TP_c}{TP_c + FP_c} Recall_c = \dfrac{TP_c}{TP_c + FN_c} \\
-F_{1, c} = \dfrac{2Precision_c \cdot Recall_c}{Precision_c + Recall_c} \\
+\begin{equation*}
+Precision_c = \dfrac{TP_c}{TP_c + FP_c} \quad Recall_c = \dfrac{TP_c}{TP_c + FN_c}
+\end{equation*}
+
+\begin{equation*}
+F_{1, c} = \dfrac{2Precision_c \cdot Recall_c}{Precision_c + Recall_c} \quad
 MacroF_1 = \dfrac{1}{C}\sum_{c=1}^{C}{F_{1, c}}
-\end{align*}
+\end{equation*}
 
 Выбор данной метрики обусловлен выраженным 
 дисбалансом классов в агрегированном наборе данных (например, соотношение классов СДВГ и рассеянного склероза составляет 96:17). 
@@ -389,6 +445,8 @@ MacroF_1 = \dfrac{1}{C}\sum_{c=1}^{C}{F_{1, c}}
 
 \begin{table}[htbp]
     \centering
+    \caption{Результаты классификации на тестовой выборке (hold-out validation)}
+    \label{tab:hold-out-results}
     \begin{tabular}{l||c}
         \toprule
         \textbf{Метрика} & \textbf{Значение} \\
@@ -400,8 +458,6 @@ MacroF_1 = \dfrac{1}{C}\sum_{c=1}^{C}{F_{1, c}}
         Macro Precision & 0.9666 \\
         \bottomrule
     \end{tabular}
-    \caption{Результаты классификации на тестовой выборке (hold-out validation)}
-    \label{tab:hold-out-results}
 \end{table}
 
 Анализ матрицы ошибок обученной модели демонстрирует, что алгоритм допускает ошибки классификации исключительно при сопоставлении пациентов с РАС 
@@ -416,12 +472,10 @@ MacroF_1 = \dfrac{1}{C}\sum_{c=1}^{C}{F_{1, c}}
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=\linewidth]{utils/conf_mat.png}
+    \includegraphics[width=0.8\linewidth]{utils/conf_mat.png}
     \caption{Матрица ошибок на тестовой выборке}
     \label{fig:test_conf_mat}
 \end{figure}
-
-\input{utils/ablation-table.tex}
 
 Способность модели безошибочно выделять сложные патологии (Alzheimer, Parkinson, Sclerosis) и при этом демонстрировать ожидаемую 
 клиническую неопределенность (см. рис. \ref{fig:test_conf_mat}) исключительно на границе контрольная группа - РАС, подтверждает, что алгоритм извлекает релевантные биомаркеры, 
@@ -429,6 +483,7 @@ MacroF_1 = \dfrac{1}{C}\sum_{c=1}^{C}{F_{1, c}}
 
 
 \subsection{Абляционное исследование}
+\input{utils/ablation-table.tex}
 
 Для объективной оценки вклада тензорной декомпозиции MPCA в итоговое качество классификации, в качестве базового уровня (baseline) была 
 разработана и протестирована эвристическая модель отбора наиболее информативных срезов (Top-3 Informative Slices).
@@ -454,7 +509,7 @@ MacroF_1 = \dfrac{1}{C}\sum_{c=1}^{C}{F_{1, c}}
 предыдущие варианты по абсолютным значениям метрик, но и демонстрирует минимальный разброс результатов при кросс-валидации, что подтверждает её 
 пригодность для решения задач дифференциальной диагностики, где критически важна воспроизводимость предсказаний.
 
-\pagebreak
+
 
 \section{Заключение}
 В рамках данного исследования предложен и экспериментально подтверждён новый подход к мультиклассовой классификации нейродегенеративных заболеваний по
@@ -473,6 +528,31 @@ MacroF_1 = \dfrac{1}{C}\sum_{c=1}^{C}{F_{1, c}}
 
 Вместе с тем работа имеет ряд ограничений: дифференциация РАС и контрольной группы остаётся затруднённой вследствие объективной вариативности нейровизуализационных паттернов; вычислительная стоимость этапа MPCA-предобработки возрастает линейно с объёмом выборки. В качестве направлений дальнейшего развития предполагается масштабирование подхода на более крупные когорты, интеграция дополнительных модальностей (DTI, fMRI), а также исследование возможности замены MPCA на обучаемые тензорные проекции.
 
-\printbibliography
+
+\bibliographystyle{ugost2008}
+\bibliography{cites}
+
+
+\printauthorsinfo
+
+\begin{translatedpart}
+    \maketranslatedtitle
+
+    \begin{abstract}
+        Timely diagnosis of diseases identifiable via magnetic resonance imaging (MRI) is crucial for selecting the optimal treatment strategy. 
+        The automation of this process is driven by the need to reduce the workload on clinical specialists. 
+        The objective of this study is to develop a patient classification algorithm based on MRI scans that remains effective under conditions 
+        of limited computational resources and small volumes of annotated data. We propose an approach based on the decomposition of a 3D MRI tensor along 
+        orthogonal planes using Multilinear Principal Component Analysis (MPCA), feature extraction via a multi-branch convolutional neural network, 
+        and subsequent late fusion of features employing a multi-head attention mechanism to adaptively weight the information streams. 
+        The evaluation was conducted on a dataset of 358 patient scans using 5-fold cross-validation. 
+        Accuracy and Macro F1-score were employed as the evaluation metrics. On hold-out validation, the model demonstrated an Accuracy of 0.9444 and a 
+        Macro F1-score of 0.9592
+        \keywordsen{Multilinear Principal Component Analysis; Multi-branch Convolutional Neural Network; Multi-Head Attention; Late Feature Fusion; Classification; MRI;}
+
+        \autocitation
+    \end{abstract}
+
+\end{translatedpart}
 
 \end{document}
