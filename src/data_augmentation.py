@@ -7,6 +7,22 @@ import torchvision.transforms as tv
 import os
 from PIL import Image
 
+def _label_from_filename(filename: str):
+    """Return the first matching class label, or None for unknown names."""
+    if "control" in filename:
+        return 0
+    elif "parkinson" in filename:
+        return 1
+    elif "alzheimer" in filename:
+        return 2
+    elif "adhd" in filename:
+        return 3
+    elif "sclerosis" in filename:
+        return 4
+    elif "autism" in filename:
+        return 5
+    return None
+
 @dataclass
 class Axis:
     axial:   str
@@ -28,12 +44,9 @@ class AxisHolder(Dataset):
             img_ = Axis(ax_dir, front_dir, sag_dir)
             self.images.append(img_)
 
-            if "control"     in img: self.labels.append(0)
-            elif "parkinson" in img: self.labels.append(1)
-            elif "alzheimer" in img: self.labels.append(2)
-            elif "adhd"      in img: self.labels.append(3)
-            elif "sclerosis" in img: self.labels.append(4)
-            elif "autism" in img: self.labels.append(5)
+            label = _label_from_filename(img)
+            if label is not None:
+                self.labels.append(label)
 
         self.counts = [self.labels.count(i) for i in range(6)]
 
@@ -67,12 +80,9 @@ class SliceHolder(Dataset):
             img_pth = os.path.join(self.dir, img)
             self.images.append(img_pth)
 
-            if "control"     in img: self.labels.append(0)
-            elif "parkinson" in img: self.labels.append(1)
-            elif "alzheimer" in img: self.labels.append(2)
-            elif "adhd"      in img: self.labels.append(3)
-            elif "sclerosis" in img: self.labels.append(4)
-            elif "autism" in img: self.labels.append(5)
+            label = _label_from_filename(img)
+            if label is not None:
+                self.labels.append(label)
 
         self.counts = [self.labels.count(i) for i in range(6)]
 

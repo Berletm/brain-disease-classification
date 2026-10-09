@@ -552,3 +552,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+AGENTS.md
+.agents
+
+/report/*
+!/report/preprint.tex
+!/report/preprint.pdf
+!/report/kioj6.cls
