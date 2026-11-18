@@ -1,0 +1,6 @@
+model: MultiBranchMean
+dataset: multi
+params:
+  base_model: ${model}
+  num_classes: 6
+  hidden_dim: 512

@@ -1,0 +1,12 @@
+root: ${oc.env:MRI_DATASET_ROOT,null}
+sources:
+  parkinson: {label: 1, enabled: true}
+  autism: {label: 5, enabled: true}
+  autism_control_old: {label: 0, enabled: true}
+  autism_control: {label: 0, enabled: true}
+  control_ixi: {label: 0, enabled: true}
+  alzheimer: {label: 2, enabled: true}
+  adhd: {label: 3, enabled: true}
+  sclerosis: {label: 4, enabled: true}
+  control_adhd: {label: 0, enabled: true}
+  autism_old: {label: 5, enabled: false}

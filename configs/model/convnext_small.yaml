@@ -1,0 +1,6 @@
+name: convnext_small
+network:
+  _target_: torchvision.models.convnext_small
+  weights: DEFAULT
+classifier: classifier.2
+trainable_layers: [features.7]

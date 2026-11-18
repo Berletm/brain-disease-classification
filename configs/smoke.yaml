@@ -1,0 +1,22 @@
+defaults:
+  - config
+  - _self_
+
+mode: smoke
+device: cpu
+cv:
+  epochs: 1
+  batch_size: 2
+preprocessing:
+  shape: [24, 24, 24]
+  ranks:
+    axial: [3, 24, 24]
+    frontal: [24, 3, 24]
+    sagital: [24, 24, 3]
+  max_iter: 2
+  augment: false
+smoke:
+  scans_per_class: 2
+  threads: 4
+tracking:
+  experiment: mpca-engineering-smoke

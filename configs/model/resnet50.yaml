@@ -1,0 +1,6 @@
+name: resnet50
+network:
+  _target_: torchvision.models.resnet50
+  weights: DEFAULT
+classifier: fc
+trainable_layers: []

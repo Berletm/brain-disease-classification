@@ -1,0 +1,7 @@
+model: SingleBranch
+dataset: mpca
+plane: axial
+params:
+  base_model: ${model}
+  num_classes: 6
+  hidden_dim: 512

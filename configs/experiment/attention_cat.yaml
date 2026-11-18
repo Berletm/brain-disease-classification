@@ -1,0 +1,9 @@
+model: MultiBranchAttention
+dataset: multi
+params:
+  base_model: ${model}
+  num_classes: 6
+  hidden_dim: 512
+  attention_dim: 576
+  attention_heads: 24
+  aggregation: cat

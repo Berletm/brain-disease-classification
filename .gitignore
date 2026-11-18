@@ -1,6 +1,6 @@
 .vscode
 __pycache__
-models
+/models/
 *.log
 ## Core latex/pdflatex auxiliary files:
 *.aux
@@ -560,3 +560,16 @@ AGENTS.md
 !/report/preprint.tex
 !/report/preprint.pdf
 !/report/kioj6.cls
+
+# Local experiment artifacts and private manifests
+/logs/
+/outputs/
+
+# MRI-derived images from restricted sources: keep local only
+/dataset/
+/heuristic_dataset/
+
+# Local continuation context contains machine-specific paths
+/docs
+/tests
+/tools

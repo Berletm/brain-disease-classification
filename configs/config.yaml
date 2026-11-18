@@ -1,0 +1,48 @@
+defaults:
+  - experiment: attention_cat
+  - dataset: mri
+  - model: convnext_tiny
+  - _self_
+
+mode: nested
+
+data:
+  manifest: null
+cv:
+  folds: 4
+  inner_folds: 3
+  batch_size: 8
+  epochs: 50
+loss:
+  gamma: 3
+  smoothing: 0.188
+tuning:
+  learning_rates: [0.0003]
+seed: 42
+device: cuda
+preprocessing:
+  shape: [91, 109, 91]
+  ranks:
+    axial: [3, 91, 109]
+    frontal: [91, 3, 109]
+    sagital: [91, 109, 3]
+  max_iter: 15
+  augment: false
+  cache:
+    enabled: true
+    format: png
+    directory: ${hydra:runtime.cwd}/logs/cache/projections
+    mmap: true
+    require_hit: false
+uncertainty:
+  bootstrap_samples: 2000
+tracking:
+  experiment: mpca-patient-grouped
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${hydra:runtime.cwd}/logs/${now:%Y-%m-%d}/${now:%H-%M-%S-%f}
+  sweep:
+    dir: ${hydra:runtime.cwd}/logs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S-%f}
+    subdir: ${hydra.job.num}

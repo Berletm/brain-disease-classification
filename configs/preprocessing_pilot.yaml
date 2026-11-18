@@ -1,0 +1,24 @@
+reference: MNI152_T1_2mm_brain.nii.gz
+brain_mask: MNI152_T1_2mm_brain_mask.nii.gz
+registration:
+  dof: 12
+  search_degrees: 20
+  cost_t1: corratio
+  cost_t2: normmi
+  timeout_seconds: 300
+segmentation:
+  classes: 3
+  bias_correction: false
+  gray_matter_index: 1
+  timeout_seconds: 600
+sources:
+  alzheimer: gm_map
+  autism: gm_map
+  autism_control: gm_map
+  autism_control_old: gm_map
+  autism_old: gm_map
+  control_ixi: gm_map
+  parkinson: gm_map
+  adhd: t1_brain
+  control_adhd: t1_brain
+  sclerosis: t2_comparison_only

@@ -1,0 +1,14 @@
+{
+  "sources": {
+    "abide1_raw": "raw_t1_with_head",
+    "adhd200_raw": "raw_t1_with_head",
+    "oasis1_mirror": "preprocessed_t1"
+  },
+  "required_spatial_units": "mm",
+  "reference": "MNI152_T1_2mm_brain.nii.gz",
+  "brain_mask": "MNI152_T1_2mm_brain_mask.nii.gz",
+  "bet": {"fraction": 0.5, "robust": true, "timeout_seconds": 180},
+  "segmentation": {"classes": 3, "gray_matter_index": 1, "timeout_seconds": 600},
+  "registration": {"dof": 12, "search_degrees": 20, "cost_t1": "corratio", "timeout_seconds": 300},
+  "smoothing": {"sigma_mm": 1.0, "timeout_seconds": 120}
+}

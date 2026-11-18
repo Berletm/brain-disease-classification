@@ -1,0 +1,19 @@
+defaults:
+  - smoke
+  - _self_
+
+mode: prepare
+preview:
+  sources: [ADHD-200/NYU]
+  labels: [0, 3]
+  patients_per_class: 8
+  contact_samples_per_partition: 4
+  min_free_gib: 2
+  min_available_ram_gib: 2
+  max_raw_gib: 0.5
+  max_seconds: 900
+tracking:
+  experiment: mpca-real-fold-preview
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/logs/mpca_preview/${now:%Y-%m-%d}/${now:%H-%M-%S-%f}
